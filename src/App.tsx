@@ -4,7 +4,8 @@ import { getDatabase, ref, onValue, set, update, push, child } from "firebase/da
 import { 
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
-  CheckCircle2, UserCheck, LogOut, Loader2, Users, List
+  CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
+  Menu, X, LayoutDashboard
 } from 'lucide-react';
 
 // エラー回避のため直接のCSSインポートを削除
@@ -13,7 +14,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v2.3 (Reveal Added)";
+const APP_VERSION = "v2.5 (Menu & Force Redirect)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -54,6 +55,7 @@ export default function App() {
   const [user, setUser] = useState<{name: string, isAdmin: boolean} | null>(null);
   const [loginName, setLoginName] = useState("");
   const [isAdminLogin, setIsAdminLogin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
 
   // --- Game Data State ---
   const [gameState, setGameState] = useState({
@@ -72,16 +74,19 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
   const [editingName, setEditingName] = useState("");
+  const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
+
+  // ★閲覧モード (nullなら現在のフェーズ、値があればその画面を強制表示)
+  const [viewMode, setViewMode] = useState<string | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   // 1. ログイン復元 & Firebase同期
   useEffect(() => {
-    // ログイン復元
     const saved = localStorage.getItem('m1_user_v2');
     if (saved) {
       try { setUser(JSON.parse(saved)); } catch(e) {}
     }
 
-    // データ同期リスナー
     const gameRef = ref(db, `${DB_ROOT}/gameState`);
     const scoresRef = ref(db, `${DB_ROOT}/scores`);
     const predsRef = ref(db, `${DB_ROOT}/predictions`);
@@ -113,6 +118,7 @@ export default function App() {
   useEffect(() => {
     if (user && predictions[user.name]) {
       setMyPrediction(predictions[user.name]);
+      setIsPredictionSubmitted(true);
     }
   }, [user, predictions]);
 
@@ -122,6 +128,16 @@ export default function App() {
     setIsScoreSubmitted(false);
   }, [gameState.currentComedianIndex]);
 
+  // ★4. 強制遷移ロジック: 採点フェーズになったら強制的に現在地に戻す
+  useEffect(() => {
+    if (gameState.phase === 'SCORING' || gameState.phase === 'FINISHED') {
+      if (viewMode !== null) {
+        setViewMode(null); // 閲覧モード解除
+        setIsMenuOpen(false); // メニューも閉じる
+      }
+    }
+  }, [gameState.phase]);
+
 
   // --- Actions ---
 
@@ -130,6 +146,10 @@ export default function App() {
     if (!loginName.trim()) return;
     if (/[.#$[\]]/.test(loginName)) {
       alert("名前に . # $ [ ] は使えません");
+      return;
+    }
+    if (isAdminLogin && adminPassword !== "0121") {
+      alert("管理者パスワードが違います");
       return;
     }
     const userData = { name: loginName.trim(), isAdmin: isAdminLogin };
@@ -142,6 +162,9 @@ export default function App() {
       localStorage.removeItem('m1_user_v2');
       setUser(null);
       setLoginName("");
+      setAdminPassword("");
+      setIsAdminLogin(false);
+      setIsMenuOpen(false);
     }
   };
 
@@ -158,6 +181,7 @@ export default function App() {
         updatedAt: Date.now()
       });
       alert("予想を保存しました！");
+      setIsPredictionSubmitted(true);
     } catch (error: any) {
       alert("保存失敗: " + error.message);
     } finally {
@@ -218,6 +242,9 @@ export default function App() {
     }).sort((a, b) => b.avg - a.avg);
   }, [scores, safeComediansList]);
 
+  // ★現在の表示フェーズを決定 (viewModeがあればそれを優先、なければgameState)
+  const displayPhase = viewMode || gameState.phase;
+
 
   // =================================================================
   // RENDER
@@ -243,10 +270,32 @@ export default function App() {
                 placeholder="例: 田中"
               />
             </div>
-            <label className="flex items-center gap-2 text-slate-400 text-sm cursor-pointer">
-              <input type="checkbox" checked={isAdminLogin} onChange={e => setIsAdminLogin(e.target.checked)} />
-              管理者モード（進行操作）
-            </label>
+            
+            <div className="pt-2">
+              <label className="flex items-center gap-2 text-slate-400 text-sm cursor-pointer mb-2">
+                <input 
+                  type="checkbox" 
+                  checked={isAdminLogin} 
+                  onChange={e => {
+                    setIsAdminLogin(e.target.checked);
+                    setAdminPassword("");
+                  }} 
+                />
+                管理者モード（進行操作）
+              </label>
+              {isAdminLogin && (
+                <div className="animate-fade-in mb-4">
+                  <input 
+                    type="password" 
+                    value={adminPassword}
+                    onChange={e => setAdminPassword(e.target.value)}
+                    className="w-full bg-slate-800 border border-red-800 rounded p-3 text-white focus:ring-2 focus:ring-red-500 outline-none"
+                    placeholder="パスワードを入力 (0121)"
+                  />
+                </div>
+              )}
+            </div>
+
             <button type="submit" className="w-full bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white font-bold py-3 rounded-lg transition-all transform active:scale-95">
               参加する
             </button>
@@ -258,33 +307,99 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 pb-32 font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 pb-32 font-sans relative">
       
-      <header className="sticky top-0 z-20 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex justify-between items-center shadow-md">
+      {/* Header */}
+      <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex justify-between items-center shadow-md">
         <div className="flex items-center gap-2 font-bold">
           <span className="bg-yellow-500 text-black px-1.5 py-0.5 rounded text-xs">M-1</span>
           <span>VOTING</span>
         </div>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 flex items-center gap-1">
-            {user.name} {user.isAdmin && <span className="text-yellow-500">★</span>}
-          </span>
-          <button onClick={handleLogout} className="text-slate-500 hover:text-white"><LogOut size={18}/></button>
+        
+        {/* ユーザーメニュー */}
+        <div className="relative">
+          <button 
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            className="flex items-center gap-2 text-sm bg-slate-800 pl-3 pr-2 py-1.5 rounded-full border border-slate-700 hover:border-slate-500 transition-colors"
+          >
+            <span className="font-bold">{user.name}</span>
+            {user.isAdmin && <span className="text-yellow-500 text-xs">★</span>}
+            {isMenuOpen ? <X size={16} /> : <Menu size={16} />}
+          </button>
+
+          {/* ドロップダウンメニュー */}
+          {isMenuOpen && (
+            <>
+              <div 
+                className="fixed inset-0 z-40 bg-black/20" 
+                onClick={() => setIsMenuOpen(false)}
+              />
+              <div className="absolute right-0 top-full mt-2 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden animate-fade-in">
+                <div className="p-2 space-y-1">
+                  <div className="px-3 py-2 text-xs text-slate-500 font-bold border-b border-slate-700/50 mb-1">
+                    MENU
+                  </div>
+                  
+                  {viewMode && (
+                    <button 
+                      onClick={() => { setViewMode(null); setIsMenuOpen(false); }}
+                      className="w-full text-left px-3 py-2 text-sm text-green-400 hover:bg-slate-700 rounded flex items-center gap-2"
+                    >
+                      <LayoutDashboard size={16}/> 現在の進行に戻る
+                    </button>
+                  )}
+
+                  <button 
+                    onClick={() => { setViewMode('PREDICTION'); setIsMenuOpen(false); }}
+                    className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'PREDICTION' ? 'bg-blue-900/50 text-blue-300' : 'hover:bg-slate-700 text-slate-200'}`}
+                  >
+                    <Crown size={16} className="text-yellow-500"/> 3連単予想を編集
+                  </button>
+
+                  <button 
+                    onClick={() => { setViewMode('PREDICTION_REVEAL'); setIsMenuOpen(false); }}
+                    className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'PREDICTION_REVEAL' ? 'bg-purple-900/50 text-purple-300' : 'hover:bg-slate-700 text-slate-200'}`}
+                  >
+                    <List size={16} className="text-purple-400"/> みんなの予想
+                  </button>
+
+                  <div className="border-t border-slate-700/50 my-1"></div>
+
+                  <button 
+                    onClick={handleLogout}
+                    className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-slate-700 rounded flex items-center gap-2"
+                  >
+                    <LogOut size={16}/> ログアウト
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </header>
 
+      {/* Phase Banner */}
       <div className={`text-center py-2 text-sm font-bold text-white shadow-lg transition-colors duration-300
-        ${gameState.phase === 'PREDICTION' ? 'bg-blue-600' : gameState.phase === 'PREDICTION_REVEAL' ? 'bg-purple-600' : gameState.phase === 'SCORING' ? 'bg-red-700' : 'bg-green-600'}`}>
-        {gameState.phase === 'PREDICTION' && "🏆 3連単予想 受付中"}
-        {gameState.phase === 'PREDICTION_REVEAL' && "👀 予想発表！"}
-        {gameState.phase === 'SCORING' && `🎤 No.${gameState.currentComedianIndex + 1} ${currentComedian?.name} 採点中`}
-        {gameState.phase === 'FINISHED' && "✨ 全日程終了 ✨"}
+        ${viewMode ? 'bg-slate-700' : gameState.phase === 'PREDICTION' ? 'bg-blue-600' : gameState.phase === 'PREDICTION_REVEAL' ? 'bg-purple-600' : gameState.phase === 'SCORING' ? 'bg-red-700' : 'bg-green-600'}`}>
+        
+        {/* 表示内容をviewModeかgameStateかで切り替え */}
+        {viewMode === 'PREDICTION' && "📝 予想の確認・編集モード"}
+        {viewMode === 'PREDICTION_REVEAL' && "👀 みんなの予想 確認モード"}
+        
+        {!viewMode && (
+          <>
+            {gameState.phase === 'PREDICTION' && "🏆 3連単予想 受付中"}
+            {gameState.phase === 'PREDICTION_REVEAL' && "👀 予想発表！"}
+            {gameState.phase === 'SCORING' && `🎤 No.${gameState.currentComedianIndex + 1} ${currentComedian?.name} 採点中`}
+            {gameState.phase === 'FINISHED' && "✨ 全日程終了 ✨"}
+          </>
+        )}
       </div>
 
       <main className="p-4 max-w-2xl mx-auto space-y-6">
 
         {/* --- PREDICTION PHASE --- */}
-        {gameState.phase === 'PREDICTION' && (
+        {displayPhase === 'PREDICTION' && (
           <div className="animate-fade-in space-y-6">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-xl">
               <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-yellow-500">
@@ -297,7 +412,10 @@ export default function App() {
                     <select 
                       className="flex-1 bg-slate-800 border border-slate-700 rounded p-3 text-white focus:border-yellow-500 outline-none"
                       value={i===0?myPrediction.first:i===1?myPrediction.second:myPrediction.third}
-                      onChange={(e) => setMyPrediction({...myPrediction, [i===0?'first':i===1?'second':'third']: e.target.value})}
+                      onChange={(e) => {
+                        setMyPrediction({...myPrediction, [i===0?'first':i===1?'second':'third']: e.target.value});
+                        setIsPredictionSubmitted(false);
+                      }}
                     >
                       <option value="">選択...</option>
                       {safeComediansList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -310,8 +428,8 @@ export default function App() {
                 disabled={isSubmitting}
                 className="mt-6 w-full py-3 bg-yellow-500 hover:bg-yellow-400 disabled:bg-slate-700 text-black font-bold rounded-lg flex items-center justify-center gap-2 transition-all"
               >
-                {isSubmitting ? <Loader2 className="animate-spin"/> : <Save size={20}/>}
-                {isSubmitting ? "保存中..." : "予想を保存する"}
+                {isSubmitting ? <Loader2 className="animate-spin"/> : isPredictionSubmitted ? <CheckCircle2 size={20}/> : <Save size={20}/>}
+                {isSubmitting ? "保存中..." : isPredictionSubmitted ? "保存済み" : "予想を保存する"}
               </button>
             </div>
 
@@ -331,8 +449,8 @@ export default function App() {
           </div>
         )}
 
-        {/* --- PREDICTION REVEAL PHASE (新規追加) --- */}
-        {gameState.phase === 'PREDICTION_REVEAL' && (
+        {/* --- PREDICTION REVEAL PHASE --- */}
+        {displayPhase === 'PREDICTION_REVEAL' && (
           <div className="animate-fade-in space-y-6">
             <div className="text-center mb-6">
               <h2 className="text-2xl font-black text-white mb-2 tracking-tighter text-yellow-500">みんなの予想</h2>
@@ -373,7 +491,7 @@ export default function App() {
         )}
 
         {/* --- SCORING & RESULT PHASE --- */}
-        {(gameState.phase === 'SCORING' || gameState.phase === 'FINISHED') && (
+        {(displayPhase === 'SCORING' || displayPhase === 'FINISHED') && (
           <div className="animate-fade-in space-y-6">
             {/* Comedian Card */}
             <div className="relative overflow-hidden bg-gradient-to-br from-red-900 to-slate-900 rounded-2xl p-8 text-center border border-red-900 shadow-2xl">
