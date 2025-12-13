@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.1 (Sync Button Moved)";
+const APP_VERSION = "v3.2 (Strict Manual Sync)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -54,20 +54,24 @@ export default function App() {
   const [isAdminLogin, setIsAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
 
-  // --- Game Data State ---
+  // --- Game Data State (Firebase Master Data) ---
   const [gameState, setGameState] = useState({
-    phase: 'PREDICTION', // PREDICTION | PREDICTION_REVEAL | SCORING | FINAL_VOTE | FINISHED
+    phase: 'PREDICTION', 
     currentComedianIndex: 0,
     isScoreRevealed: false,
     comedians: INITIAL_COMEDIANS,
-    finalists: [] as number[], // 決勝進出者のIDリスト
+    finalists: [] as number[],
     forceSyncTimestamp: 0, 
     revealedStatus: {} as Record<string, boolean>
   });
+
+  // --- Local Display State (実際に画面に表示するデータ) ---
+  // 自動遷移を防ぐため、Firebaseデータとは分離して管理
+  const [localDisplay, setLocalDisplay] = useState<typeof gameState | null>(null);
   
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
   const [predictions, setPredictions] = useState<Record<string, any>>({});
-  const [finalVotes, setFinalVotes] = useState<Record<string, number>>({}); // { userName: comedianId }
+  const [finalVotes, setFinalVotes] = useState<Record<string, number>>({}); 
 
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
@@ -80,23 +84,26 @@ export default function App() {
   // 最終決戦用
   const [selectedVoteId, setSelectedVoteId] = useState<number | null>(null);
   const [isVoteSubmitted, setIsVoteSubmitted] = useState(false);
-  const [showFinalistModal, setShowFinalistModal] = useState(false); // 管理者用モーダル
-  const [tempFinalists, setTempFinalists] = useState<number[]>([]); // モーダル内の一時選択
+  const [showFinalistModal, setShowFinalistModal] = useState(false); 
+  const [tempFinalists, setTempFinalists] = useState<number[]>([]); 
 
   // ★閲覧モード
   const [viewMode, setViewMode] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   // 最後に処理した同期命令の時刻
-  const lastSyncTimestamp = useRef(Date.now());
+  const lastSyncTimestamp = useRef(0);
 
-  // 1. ログイン復元 & Firebase同期
+  // 1. ログイン復元
   useEffect(() => {
     const saved = localStorage.getItem('m1_user_v2');
     if (saved) {
       try { setUser(JSON.parse(saved)); } catch(e) {}
     }
+  }, []);
 
+  // 2. Firebase同期 (gameStateの受信のみ行い、自動でlocalDisplayには反映しない)
+  useEffect(() => {
     const gameRef = ref(db, `${DB_ROOT}/gameState`);
     const scoresRef = ref(db, `${DB_ROOT}/scores`);
     const predsRef = ref(db, `${DB_ROOT}/predictions`);
@@ -105,14 +112,28 @@ export default function App() {
     const unsubGame = onValue(gameRef, (snap) => {
       const val = snap.val();
       if (val) {
-        setGameState(prev => ({
-          ...prev, 
-          ...val,
-          comedians: val.comedians || prev.comedians || INITIAL_COMEDIANS,
+        const newGameState = {
+          phase: val.phase || 'PREDICTION',
+          currentComedianIndex: val.currentComedianIndex || 0,
+          isScoreRevealed: val.isScoreRevealed || false,
+          comedians: val.comedians || INITIAL_COMEDIANS,
           finalists: val.finalists || [],
+          forceSyncTimestamp: val.forceSyncTimestamp || 0,
           revealedStatus: val.revealedStatus || {}
-        }));
+        };
+        setGameState(newGameState);
+
+        // ★初回ロード時のみ、強制的に同期して表示する
+        setLocalDisplay(prev => {
+          if (prev === null) {
+            lastSyncTimestamp.current = newGameState.forceSyncTimestamp;
+            return newGameState;
+          }
+          return prev;
+        });
+
       } else {
+        // データがない場合は初期化
         set(gameRef, {
             phase: 'PREDICTION',
             currentComedianIndex: 0,
@@ -131,34 +152,36 @@ export default function App() {
     return () => { unsubGame(); unsubScores(); unsubPreds(); unsubVotes(); };
   }, []);
 
-  // ★強制同期監視 (これ以外の自動遷移は削除済み)
+  // ★3. 強制同期監視 & 手動同期ロジック
   useEffect(() => {
-    if (gameState.forceSyncTimestamp && gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
-      setViewMode(null);
+    // タイムスタンプが更新され、かつ手元の記録より新しい場合のみ同期実行
+    if (gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
+      console.log("Manual Sync Triggered");
+      setLocalDisplay(gameState); // 最新の状態を表示に反映
+      setViewMode(null);          // 閲覧モード解除
       setIsMenuOpen(false);
       lastSyncTimestamp.current = gameState.forceSyncTimestamp;
     }
-  }, [gameState.forceSyncTimestamp]);
+  }, [gameState.forceSyncTimestamp, gameState]); // gameStateも依存に含める
 
-  // 2. 自分の予想・投票データの反映
+  // 4. データ反映系 (localDisplayベースで動作)
+  // localDisplayが更新されたら、それに基づいて自分の入力状態などをリセット
   useEffect(() => {
-    if (user) {
-      if (predictions[user.name]) {
-        setMyPrediction(predictions[user.name]);
-        setIsPredictionSubmitted(true);
-      }
-      if (finalVotes[user.name]) {
-        setSelectedVoteId(finalVotes[user.name]);
-        setIsVoteSubmitted(true);
-      }
-    }
-  }, [user, predictions, finalVotes]);
-
-  // 3. コンビ切り替え時のリセット
-  useEffect(() => {
+    if (!localDisplay) return;
     setMyScore(85);
     setIsScoreSubmitted(false);
-  }, [gameState.currentComedianIndex]);
+  }, [localDisplay?.currentComedianIndex]);
+
+  useEffect(() => {
+    if (user && predictions[user.name]) {
+      setMyPrediction(predictions[user.name]);
+      setIsPredictionSubmitted(true);
+    }
+    if (user && finalVotes[user.name]) {
+      setSelectedVoteId(finalVotes[user.name]);
+      setIsVoteSubmitted(true);
+    }
+  }, [user, predictions, finalVotes]);
 
 
   // --- Actions ---
@@ -212,11 +235,10 @@ export default function App() {
   };
 
   const sendScore = async () => {
-    if (!user) return;
+    if (!user || !localDisplay) return;
     setIsSubmitting(true);
     try {
-      const safeComedians = gameState.comedians || INITIAL_COMEDIANS;
-      const current = safeComedians[gameState.currentComedianIndex] || safeComedians[0];
+      const current = localDisplay.comedians[localDisplay.currentComedianIndex];
       await set(ref(db, `${DB_ROOT}/scores/${current.id}/${user.name}`), myScore);
       setIsScoreSubmitted(true);
     } catch (error: any) {
@@ -241,16 +263,14 @@ export default function App() {
     }
   };
 
-  // --- Admin Actions ---
+  // --- Admin Actions (これらはgameStateを更新する) ---
   const updateGameState = (updates: any) => {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
 
   const adminChangeComedian = (newIndex: number) => {
-    const safeComedians = gameState.comedians || INITIAL_COMEDIANS;
-    const nextComedian = safeComedians[newIndex];
+    const nextComedian = gameState.comedians[newIndex];
     if (!nextComedian) return;
-
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
 
     updateGameState({
@@ -279,7 +299,7 @@ export default function App() {
   };
 
   const triggerForceSync = () => {
-    if (confirm("参加者全員の画面を、現在の進行画面に強制的に戻しますか？")) {
+    if (confirm("【確認】全参加者の画面を、現在の管理者画面と同じ状態に強制変更しますか？")) {
       update(ref(db, `${DB_ROOT}/gameState`), {
         forceSyncTimestamp: Date.now()
       });
@@ -306,37 +326,38 @@ export default function App() {
   };
 
   // --- Helpers ---
-  const safeComediansList = gameState.comedians || INITIAL_COMEDIANS;
-  const currentComedian = safeComediansList[gameState.currentComedianIndex] || safeComediansList[0];
+  // ★表示には localDisplay を使用する (データ未着時はgameStateでフォールバック)
+  const displayData = localDisplay || gameState;
+  const currentComedian = displayData.comedians[displayData.currentComedianIndex];
   
   const getComedianName = (id: string | number) => {
-    const c = safeComediansList.find(c => String(c.id) === String(id));
+    const c = displayData.comedians.find(c => String(c.id) === String(id));
     return c ? c.name : "不明";
   };
 
   const ranking = useMemo(() => {
-    return safeComediansList.map(c => {
+    return displayData.comedians.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       return { ...c, avg: parseFloat(avg) };
     }).sort((a, b) => b.avg - a.avg);
-  }, [scores, safeComediansList]);
+  }, [scores, displayData.comedians]);
 
-  // 決戦投票の結果集計
   const finalVoteResult = useMemo(() => {
     const result: Record<number, number> = {};
-    if (gameState.finalists) {
-      gameState.finalists.forEach(id => result[id] = 0);
+    if (displayData.finalists) {
+      displayData.finalists.forEach(id => result[id] = 0);
     }
     Object.values(finalVotes).forEach(voteId => {
       if (result[voteId] !== undefined) result[voteId]++;
     });
     return result;
-  }, [finalVotes, gameState.finalists]);
+  }, [finalVotes, displayData.finalists]);
 
-  // ★現在の表示フェーズを決定
-  const displayPhase = viewMode || gameState.phase;
+  // ★最終的な表示モードの決定
+  // viewModeがあればそれを、なければ同期されたlocalDisplayのフェーズを表示
+  const activePhase = viewMode || displayData.phase;
 
 
   // =================================================================
@@ -483,7 +504,7 @@ export default function App() {
 
       {/* Phase Banner */}
       <div className={`text-center py-2 text-sm font-bold text-white shadow-lg transition-colors duration-300
-        ${viewMode ? 'bg-slate-700' : gameState.phase === 'PREDICTION' ? 'bg-blue-600' : gameState.phase === 'PREDICTION_REVEAL' ? 'bg-purple-600' : gameState.phase === 'SCORING' ? 'bg-red-700' : gameState.phase === 'FINAL_VOTE' ? 'bg-yellow-600' : 'bg-green-600'}`}>
+        ${viewMode ? 'bg-slate-700' : displayData.phase === 'PREDICTION' ? 'bg-blue-600' : displayData.phase === 'PREDICTION_REVEAL' ? 'bg-purple-600' : displayData.phase === 'SCORING' ? 'bg-red-700' : displayData.phase === 'FINAL_VOTE' ? 'bg-yellow-600' : 'bg-green-600'}`}>
         
         {viewMode === 'SCORE_HISTORY' && "📊 採点結果一覧"}
         {viewMode === 'PREDICTION' && "📝 予想の確認・編集モード"}
@@ -492,11 +513,11 @@ export default function App() {
         
         {!viewMode && (
           <>
-            {gameState.phase === 'PREDICTION' && "🏆 3連単予想 受付中"}
-            {gameState.phase === 'PREDICTION_REVEAL' && "👀 予想発表！"}
-            {gameState.phase === 'SCORING' && `🎤 No.${gameState.currentComedianIndex + 1} ${currentComedian?.name} 採点中`}
-            {gameState.phase === 'FINAL_VOTE' && "🔥 最終決戦 投票受付中"}
-            {gameState.phase === 'FINISHED' && "✨ 全日程終了 ✨"}
+            {displayData.phase === 'PREDICTION' && "🏆 3連単予想 受付中"}
+            {displayData.phase === 'PREDICTION_REVEAL' && "👀 予想発表！"}
+            {displayData.phase === 'SCORING' && `🎤 No.${displayData.currentComedianIndex + 1} ${currentComedian?.name} 採点中`}
+            {displayData.phase === 'FINAL_VOTE' && "🔥 最終決戦 投票受付中"}
+            {displayData.phase === 'FINISHED' && "✨ 全日程終了 ✨"}
           </>
         )}
       </div>
@@ -504,7 +525,7 @@ export default function App() {
       <main className="p-4 max-w-2xl mx-auto space-y-6">
 
         {/* --- SCORE HISTORY PHASE --- */}
-        {displayPhase === 'SCORE_HISTORY' && (
+        {activePhase === 'SCORE_HISTORY' && (
           <div className="animate-fade-in space-y-6">
             <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-xl">
               <div className="p-4 bg-slate-800/50 border-b border-slate-800 flex items-center gap-2">
@@ -524,7 +545,7 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-slate-800">
                     {safeComediansList.map((c, i) => {
-                      const isRevealed = gameState.revealedStatus?.[c.id];
+                      const isRevealed = displayData.revealedStatus?.[c.id];
                       const myScoreVal = scores[c.id]?.[user.name];
                       const rankData = ranking.find(r => r.id === c.id);
                       const rankIndex = ranking.findIndex(r => r.id === c.id) + 1;
@@ -560,7 +581,7 @@ export default function App() {
         )}
 
         {/* --- PREDICTION PHASE --- */}
-        {displayPhase === 'PREDICTION' && (
+        {activePhase === 'PREDICTION' && (
           <div className="animate-fade-in space-y-6">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-xl">
               <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-yellow-500">
@@ -611,7 +632,7 @@ export default function App() {
         )}
 
         {/* --- PREDICTION REVEAL PHASE --- */}
-        {displayPhase === 'PREDICTION_REVEAL' && (
+        {activePhase === 'PREDICTION_REVEAL' && (
           <div className="animate-fade-in space-y-6">
             <div className="text-center mb-6">
               <h2 className="text-2xl font-black text-white mb-2 tracking-tighter text-yellow-500">みんなの予想</h2>
@@ -652,17 +673,17 @@ export default function App() {
         )}
 
         {/* --- SCORING & RESULT PHASE --- */}
-        {(displayPhase === 'SCORING' || displayPhase === 'FINISHED') && (
+        {(activePhase === 'SCORING' || activePhase === 'FINISHED') && (
           <div className="animate-fade-in space-y-6">
             {/* Comedian Card */}
             <div className="relative overflow-hidden bg-gradient-to-br from-red-900 to-slate-900 rounded-2xl p-8 text-center border border-red-900 shadow-2xl">
               <div className="absolute top-0 right-0 p-4 opacity-10"><Mic size={120}/></div>
               <div className="relative z-10">
-                <div className="text-red-300 font-bold text-xs tracking-widest mb-2">ENTRY NO.{gameState.currentComedianIndex + 1}</div>
+                <div className="text-red-300 font-bold text-xs tracking-widest mb-2">ENTRY NO.{displayData.currentComedianIndex + 1}</div>
                 <h2 className="text-4xl md:text-5xl font-black text-white mb-4 drop-shadow-lg tracking-tight">
                   {currentComedian?.name}
                 </h2>
-                {gameState.isScoreRevealed ? (
+                {displayData.isScoreRevealed ? (
                   <div className="inline-flex items-baseline gap-2 bg-black/40 px-6 py-2 rounded-full backdrop-blur-sm border border-yellow-500/30">
                     <span className="text-sm text-slate-300">平均</span>
                     <span className="text-5xl font-black text-yellow-400">{ranking.find(c => c.id === currentComedian.id)?.avg}</span>
@@ -670,13 +691,13 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="h-16 flex items-center justify-center text-slate-400 text-sm animate-pulse">
-                    {gameState.phase === 'SCORING' ? "審査中..." : ""}
+                    {displayData.phase === 'SCORING' ? "審査中..." : ""}
                   </div>
                 )}
               </div>
             </div>
 
-            {!gameState.isScoreRevealed && gameState.phase === 'SCORING' && (
+            {!displayData.isScoreRevealed && displayData.phase === 'SCORING' && (
               <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
                 {!isScoreSubmitted ? (
                   <>
@@ -713,7 +734,7 @@ export default function App() {
               </div>
             )}
 
-            {gameState.isScoreRevealed && (
+            {displayData.isScoreRevealed && (
               <div className="space-y-4">
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300">
@@ -753,8 +774,8 @@ export default function App() {
           </div>
         )}
 
-        {/* --- FINAL VOTE PHASE (新規追加) --- */}
-        {(displayPhase === 'FINAL_VOTE') && (
+        {/* --- FINAL VOTE PHASE --- */}
+        {(activePhase === 'FINAL_VOTE') && (
           <div className="animate-fade-in space-y-6">
             <div className="text-center">
               <div className="inline-flex items-center gap-2 bg-yellow-500 text-black px-4 py-1 rounded-full font-bold mb-4">
@@ -765,24 +786,23 @@ export default function App() {
 
             {/* 決戦3組の表示 & 投票 */}
             <div className="grid gap-4">
-              {(!gameState.finalists || gameState.finalists.length === 0) && (
+              {(!displayData.finalists || displayData.finalists.length === 0) && (
                 <div className="text-center text-slate-500 py-10 bg-slate-900 rounded-xl border border-slate-800">
                   まだ決戦進出者が決定していません
                 </div>
               )}
               
-              {gameState.finalists?.map((id) => {
+              {displayData.finalists?.map((id) => {
                 const comedian = safeComediansList.find(c => c.id === id);
                 if (!comedian) return null;
                 const isSelected = selectedVoteId === id;
-                // 得票数計算 (オープン時のみ)
                 const voteCount = finalVoteResult[id] || 0;
                 
                 return (
                   <div 
                     key={id}
                     onClick={() => {
-                      if (!isVoteSubmitted && !gameState.isScoreRevealed) {
+                      if (!isVoteSubmitted && !displayData.isScoreRevealed) {
                         setSelectedVoteId(id);
                       }
                     }}
@@ -790,15 +810,14 @@ export default function App() {
                       ${isSelected 
                         ? 'bg-red-900/40 border-red-500 shadow-[0_0_30px_rgba(239,68,68,0.3)]' 
                         : 'bg-slate-900 border-slate-700 hover:border-slate-500'}
-                      ${isVoteSubmitted || gameState.isScoreRevealed ? 'cursor-default' : ''}
+                      ${isVoteSubmitted || displayData.isScoreRevealed ? 'cursor-default' : ''}
                     `}
                   >
                     <div className="flex justify-between items-center relative z-10">
                       <span className={`text-2xl font-black ${isSelected ? 'text-white' : 'text-slate-300'}`}>{comedian.name}</span>
-                      {isSelected && !gameState.isScoreRevealed && <CheckCircle2 className="text-red-500" size={32}/>}
+                      {isSelected && !displayData.isScoreRevealed && <CheckCircle2 className="text-red-500" size={32}/>}
                       
-                      {/* 結果オープン時の得票表示 */}
-                      {gameState.isScoreRevealed && (
+                      {displayData.isScoreRevealed && (
                         <div className="flex items-end gap-2">
                           <span className="text-4xl font-black text-yellow-500">{voteCount}</span>
                           <span className="text-xs text-slate-400 mb-1">票</span>
@@ -806,8 +825,7 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* 投票済みの人の名前表示 (結果オープン時) */}
-                    {gameState.isScoreRevealed && (
+                    {displayData.isScoreRevealed && (
                       <div className="mt-4 pt-4 border-t border-slate-700/50 flex flex-wrap gap-2">
                         {Object.entries(finalVotes).filter(([_, vId]) => vId === id).map(([name]) => (
                           <span key={name} className="text-xs bg-slate-800 px-2 py-1 rounded text-slate-300 border border-slate-700">
@@ -821,7 +839,7 @@ export default function App() {
               })}
             </div>
 
-            {!gameState.isScoreRevealed && gameState.finalists?.length > 0 && (
+            {!displayData.isScoreRevealed && displayData.finalists?.length > 0 && (
               <button 
                 onClick={sendFinalVote}
                 disabled={isSubmitting || isVoteSubmitted || !selectedVoteId}
@@ -847,13 +865,15 @@ export default function App() {
             <div className="flex items-center justify-between">
               <div className="text-xs font-bold text-red-500 flex items-center gap-1"><Settings size={12}/> ADMIN</div>
               <div className="flex bg-slate-800 rounded p-1 gap-1 overflow-x-auto">
+                {/* ★全員同期ボタン：一番左に配置 */}
                 <button 
                   onClick={triggerForceSync}
-                  className="px-3 py-1 rounded text-xs text-green-400 bg-slate-900 hover:bg-slate-700 flex items-center gap-1 border border-slate-700"
+                  className="px-3 py-1 rounded text-xs text-green-400 bg-slate-900 hover:bg-slate-700 flex items-center gap-1 border border-slate-700 whitespace-nowrap"
                   title="全参加者の画面を現在の進行状況に強制的に戻します"
                 >
                   <Radio size={12} className="animate-pulse"/> 全員同期
                 </button>
+                <div className="w-[1px] bg-slate-700 mx-1 h-6 self-center"></div>
                 <button onClick={() => updateGameState({phase: 'PREDICTION'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>予想</button>
                 <button onClick={() => updateGameState({phase: 'PREDICTION_REVEAL'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION_REVEAL' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>発表</button>
                 <button onClick={() => updateGameState({phase: 'SCORING'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='SCORING' ? 'bg-red-600 text-white' : 'text-slate-400'}`}>採点</button>
