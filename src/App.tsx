@@ -20,7 +20,7 @@ const firebaseConfig = {
   storageBucket: "m1-app-1e177.firebasestorage.app",
   messagingSenderId: "765518236984",
   appId: "1:765518236984:web:ee6fffae3d38729a1605cd",
-  databaseURL: "https://m1-app-1e177-default-rtdb.firebaseio.com"
+  databaseURL: "https://m1-app-1e177-default-rtdb.firebaseio.com/"
 };
 
 // コンビ名リスト（2025年版想定）
