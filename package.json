@@ -19,9 +19,57 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "postcss": "^8.4.33",
+    "tailwindcss": "^3.4.1",
     "eslint": "^8.55.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
     "vite": "^5.0.8"
   }
 }
+
+### 作業3：設定ファイルの作成 (tailwind.config.js)
+
+ここからは**新しいファイル**を作ります。
+
+1.  GitHubのファイル一覧ページ（トップ）に戻ります。
+2.  右上の **「Add file」** ボタンを押し、**「Create new file」** を選びます。
+3.  ファイル名の欄に **`tailwind.config.js`** と入力します。
+4.  下の大きな入力欄に、以下のコードを貼り付けます。
+5.  「Commit changes」を押します。
+
+```javascript
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+
+### 作業4：設定ファイルの作成 (postcss.config.js)
+
+もう一つ新しいファイルを作ります。手順は同じです。
+
+1.  **「Add file」** → **「Create new file」** を選びます。
+2.  ファイル名を **`postcss.config.js`** にします。
+3.  以下のコードを貼り付けます。
+4.  「Commit changes」を押します。
+
+```javascript
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+---
+
+**以上です！**
+この4つの作業が終わると、Vercelが自動的に検知して、正しいデザインでアプリを公開してくれます。1〜2分後にVercelのURLを開いてみてください。きれいな画面が表示されるはずです！
