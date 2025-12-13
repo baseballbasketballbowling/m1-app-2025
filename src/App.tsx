@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, update, push, child } from "firebase/database";
 import { 
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
   CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
-  Menu, X, LayoutDashboard
+  Menu, X, LayoutDashboard, Radio
 } from 'lucide-react';
 
 // エラー回避のため直接のCSSインポートを削除
@@ -14,7 +14,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v2.5 (Menu & Force Redirect)";
+const APP_VERSION = "v2.7 (Manual Sync Button)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -63,6 +63,7 @@ export default function App() {
     currentComedianIndex: 0,
     isScoreRevealed: false,
     comedians: INITIAL_COMEDIANS,
+    forceSyncTimestamp: 0, // 強制同期用のタイムスタンプ
   });
   
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
@@ -79,6 +80,9 @@ export default function App() {
   // ★閲覧モード (nullなら現在のフェーズ、値があればその画面を強制表示)
   const [viewMode, setViewMode] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  // 最後に処理した同期命令の時刻を記録（自分がログインしてからの命令のみ受け付けるため初期値は現在時刻）
+  const lastSyncTimestamp = useRef(Date.now());
 
   // 1. ログイン復元 & Firebase同期
   useEffect(() => {
@@ -99,12 +103,22 @@ export default function App() {
           ...val,
           comedians: val.comedians || prev.comedians || INITIAL_COMEDIANS
         }));
+
+        // ★強制同期ロジック: DB上のタイムスタンプが新しければViewModeを解除
+        if (val.forceSyncTimestamp && val.forceSyncTimestamp > lastSyncTimestamp.current) {
+          setViewMode(null);
+          setIsMenuOpen(false);
+          lastSyncTimestamp.current = val.forceSyncTimestamp;
+          // 必要ならトースト通知などを出す場所
+        }
+
       } else {
         set(gameRef, {
             phase: 'PREDICTION',
             currentComedianIndex: 0,
             isScoreRevealed: false,
-            comedians: INITIAL_COMEDIANS
+            comedians: INITIAL_COMEDIANS,
+            forceSyncTimestamp: 0
         });
       }
     });
@@ -128,15 +142,15 @@ export default function App() {
     setIsScoreSubmitted(false);
   }, [gameState.currentComedianIndex]);
 
-  // ★4. 強制遷移ロジック: 採点フェーズになったら強制的に現在地に戻す
+  // 4. 自動強制遷移ロジック: SCORINGフェーズ中は、コンビ変更時などにViewModeを解除
   useEffect(() => {
     if (gameState.phase === 'SCORING' || gameState.phase === 'FINISHED') {
       if (viewMode !== null) {
-        setViewMode(null); // 閲覧モード解除
-        setIsMenuOpen(false); // メニューも閉じる
+        setViewMode(null); 
+        setIsMenuOpen(false); 
       }
     }
-  }, [gameState.phase]);
+  }, [gameState.phase, gameState.currentComedianIndex]);
 
 
   // --- Actions ---
@@ -209,6 +223,15 @@ export default function App() {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
 
+  // ★全員同期ボタンのアクション
+  const triggerForceSync = () => {
+    if (confirm("参加者全員の画面を、現在の進行画面に強制的に戻しますか？")) {
+      update(ref(db, `${DB_ROOT}/gameState`), {
+        forceSyncTimestamp: Date.now()
+      });
+    }
+  };
+
   const resetDatabase = async () => {
     if (!confirm("【危険】全データを消去してリセットしますか？")) return;
     await set(ref(db, `${DB_ROOT}`), {
@@ -216,7 +239,8 @@ export default function App() {
         phase: 'PREDICTION',
         currentComedianIndex: 0,
         isScoreRevealed: false,
-        comedians: INITIAL_COMEDIANS
+        comedians: INITIAL_COMEDIANS,
+        forceSyncTimestamp: 0
       },
       scores: {},
       predictions: {}
@@ -290,7 +314,7 @@ export default function App() {
                     value={adminPassword}
                     onChange={e => setAdminPassword(e.target.value)}
                     className="w-full bg-slate-800 border border-red-800 rounded p-3 text-white focus:ring-2 focus:ring-red-500 outline-none"
-                    placeholder="パスワードを入力 (0121)"
+                    placeholder="パスワードを入力" 
                   />
                 </div>
               )}
@@ -602,6 +626,13 @@ export default function App() {
             <div className="flex items-center justify-between">
               <div className="text-xs font-bold text-red-500 flex items-center gap-1"><Settings size={12}/> ADMIN</div>
               <div className="flex bg-slate-800 rounded p-1 gap-1">
+                <button 
+                  onClick={triggerForceSync}
+                  className="px-3 py-1 rounded text-xs text-green-400 bg-slate-900 hover:bg-slate-700 flex items-center gap-1 border border-slate-700"
+                  title="全参加者の画面を現在の進行状況に強制的に戻します"
+                >
+                  <Radio size={12} className="animate-pulse"/> 全員同期
+                </button>
                 <button 
                   onClick={() => updateGameState({phase: 'PREDICTION'})}
                   className={`px-3 py-1 rounded text-xs ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
