@@ -1,20 +1,17 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, update, push, child } from "firebase/database";
+import { getDatabase, ref, onValue, set, update } from "firebase/database";
 import { 
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
   CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
-  Menu, X, LayoutDashboard, Radio
+  Menu, X, LayoutDashboard, Radio, ClipboardList
 } from 'lucide-react';
-
-// エラー回避のため直接のCSSインポートを削除
-// import './index.css';
 
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v2.7 (Manual Sync Button)";
+const APP_VERSION = "v2.9 (Score History & Persistent Reveal)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -59,11 +56,12 @@ export default function App() {
 
   // --- Game Data State ---
   const [gameState, setGameState] = useState({
-    phase: 'PREDICTION', // PREDICTION | PREDICTION_REVEAL | SCORING | FINISHED
+    phase: 'PREDICTION', 
     currentComedianIndex: 0,
     isScoreRevealed: false,
     comedians: INITIAL_COMEDIANS,
-    forceSyncTimestamp: 0, // 強制同期用のタイムスタンプ
+    forceSyncTimestamp: 0, 
+    revealedStatus: {} as Record<string, boolean> // ★追加: どのコンビがオープン済みか記録
   });
   
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
@@ -77,11 +75,11 @@ export default function App() {
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
 
-  // ★閲覧モード (nullなら現在のフェーズ、値があればその画面を強制表示)
+  // ★閲覧モード
   const [viewMode, setViewMode] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-  // 最後に処理した同期命令の時刻を記録（自分がログインしてからの命令のみ受け付けるため初期値は現在時刻）
+  // 最後に処理した同期命令の時刻
   const lastSyncTimestamp = useRef(Date.now());
 
   // 1. ログイン復元 & Firebase同期
@@ -101,15 +99,15 @@ export default function App() {
         setGameState(prev => ({
           ...prev, 
           ...val,
-          comedians: val.comedians || prev.comedians || INITIAL_COMEDIANS
+          comedians: val.comedians || prev.comedians || INITIAL_COMEDIANS,
+          revealedStatus: val.revealedStatus || {}
         }));
 
-        // ★強制同期ロジック: DB上のタイムスタンプが新しければViewModeを解除
+        // 強制同期ロジック
         if (val.forceSyncTimestamp && val.forceSyncTimestamp > lastSyncTimestamp.current) {
           setViewMode(null);
           setIsMenuOpen(false);
           lastSyncTimestamp.current = val.forceSyncTimestamp;
-          // 必要ならトースト通知などを出す場所
         }
 
       } else {
@@ -118,7 +116,8 @@ export default function App() {
             currentComedianIndex: 0,
             isScoreRevealed: false,
             comedians: INITIAL_COMEDIANS,
-            forceSyncTimestamp: 0
+            forceSyncTimestamp: 0,
+            revealedStatus: {}
         });
       }
     });
@@ -141,16 +140,6 @@ export default function App() {
     setMyScore(85);
     setIsScoreSubmitted(false);
   }, [gameState.currentComedianIndex]);
-
-  // 4. 自動強制遷移ロジック: SCORINGフェーズ中は、コンビ変更時などにViewModeを解除
-  useEffect(() => {
-    if (gameState.phase === 'SCORING' || gameState.phase === 'FINISHED') {
-      if (viewMode !== null) {
-        setViewMode(null); 
-        setIsMenuOpen(false); 
-      }
-    }
-  }, [gameState.phase, gameState.currentComedianIndex]);
 
 
   // --- Actions ---
@@ -223,7 +212,39 @@ export default function App() {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
 
-  // ★全員同期ボタンのアクション
+  // ★管理者: コンビ切り替えロジック（オープン状態の維持）
+  const adminChangeComedian = (newIndex: number) => {
+    const safeComedians = gameState.comedians || INITIAL_COMEDIANS;
+    const nextComedian = safeComedians[newIndex];
+    if (!nextComedian) return;
+
+    // 次のコンビが過去にオープン済みかチェック
+    const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
+
+    updateGameState({
+      currentComedianIndex: newIndex,
+      isScoreRevealed: nextIsRevealed, // 履歴があればオープン状態で開始
+      phase: 'SCORING' // 切り替え時は強制的に採点フェーズへ
+    });
+  };
+
+  // ★管理者: 結果オープン/クローズロジック
+  const adminToggleReveal = () => {
+    const currentId = gameState.comedians[gameState.currentComedianIndex].id;
+    const newRevealState = !gameState.isScoreRevealed;
+
+    const updates: any = {
+      isScoreRevealed: newRevealState
+    };
+
+    // オープンにする時は履歴にも記録する
+    if (newRevealState) {
+      updates[`revealedStatus/${currentId}`] = true;
+    }
+
+    updateGameState(updates);
+  };
+
   const triggerForceSync = () => {
     if (confirm("参加者全員の画面を、現在の進行画面に強制的に戻しますか？")) {
       update(ref(db, `${DB_ROOT}/gameState`), {
@@ -240,7 +261,8 @@ export default function App() {
         currentComedianIndex: 0,
         isScoreRevealed: false,
         comedians: INITIAL_COMEDIANS,
-        forceSyncTimestamp: 0
+        forceSyncTimestamp: 0,
+        revealedStatus: {}
       },
       scores: {},
       predictions: {}
@@ -266,7 +288,7 @@ export default function App() {
     }).sort((a, b) => b.avg - a.avg);
   }, [scores, safeComediansList]);
 
-  // ★現在の表示フェーズを決定 (viewModeがあればそれを優先、なければgameState)
+  // ★現在の表示フェーズを決定
   const displayPhase = viewMode || gameState.phase;
 
 
@@ -358,7 +380,7 @@ export default function App() {
                 className="fixed inset-0 z-40 bg-black/20" 
                 onClick={() => setIsMenuOpen(false)}
               />
-              <div className="absolute right-0 top-full mt-2 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden animate-fade-in">
+              <div className="absolute right-0 top-full mt-2 w-64 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden animate-fade-in">
                 <div className="p-2 space-y-1">
                   <div className="px-3 py-2 text-xs text-slate-500 font-bold border-b border-slate-700/50 mb-1">
                     MENU
@@ -372,6 +394,13 @@ export default function App() {
                       <LayoutDashboard size={16}/> 現在の進行に戻る
                     </button>
                   )}
+
+                  <button 
+                    onClick={() => { setViewMode('SCORE_HISTORY'); setIsMenuOpen(false); }}
+                    className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'SCORE_HISTORY' ? 'bg-orange-900/50 text-orange-300' : 'hover:bg-slate-700 text-slate-200'}`}
+                  >
+                    <ClipboardList size={16} className="text-orange-500"/> 採点結果一覧
+                  </button>
 
                   <button 
                     onClick={() => { setViewMode('PREDICTION'); setIsMenuOpen(false); }}
@@ -406,7 +435,7 @@ export default function App() {
       <div className={`text-center py-2 text-sm font-bold text-white shadow-lg transition-colors duration-300
         ${viewMode ? 'bg-slate-700' : gameState.phase === 'PREDICTION' ? 'bg-blue-600' : gameState.phase === 'PREDICTION_REVEAL' ? 'bg-purple-600' : gameState.phase === 'SCORING' ? 'bg-red-700' : 'bg-green-600'}`}>
         
-        {/* 表示内容をviewModeかgameStateかで切り替え */}
+        {viewMode === 'SCORE_HISTORY' && "📊 採点結果一覧"}
         {viewMode === 'PREDICTION' && "📝 予想の確認・編集モード"}
         {viewMode === 'PREDICTION_REVEAL' && "👀 みんなの予想 確認モード"}
         
@@ -421,6 +450,66 @@ export default function App() {
       </div>
 
       <main className="p-4 max-w-2xl mx-auto space-y-6">
+
+        {/* --- SCORE HISTORY PHASE (新規追加) --- */}
+        {displayPhase === 'SCORE_HISTORY' && (
+          <div className="animate-fade-in space-y-6">
+            <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-xl">
+              <div className="p-4 bg-slate-800/50 border-b border-slate-800 flex items-center gap-2">
+                <BarChart3 className="text-orange-500" size={20}/>
+                <h2 className="font-bold text-lg">採点結果一覧</h2>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-slate-800 text-slate-400">
+                    <tr>
+                      <th className="p-3 text-center w-10">#</th>
+                      <th className="p-3">コンビ名</th>
+                      <th className="p-3 text-center">My点</th>
+                      <th className="p-3 text-center">平均</th>
+                      <th className="p-3 text-center">順位</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {safeComediansList.map((c, i) => {
+                      // コンビごとのデータを取得
+                      const isRevealed = gameState.revealedStatus?.[c.id];
+                      const myScoreVal = scores[c.id]?.[user.name];
+                      
+                      // 平均点と順位はrankingから探す
+                      const rankData = ranking.find(r => r.id === c.id);
+                      // 順位は配列のインデックスから計算
+                      const rankIndex = ranking.findIndex(r => r.id === c.id) + 1;
+
+                      return (
+                        <tr key={c.id} className="hover:bg-slate-800/50">
+                          <td className="p-3 text-center text-slate-500">{i + 1}</td>
+                          <td className="p-3 font-bold text-white">{c.name}</td>
+                          <td className="p-3 text-center font-bold text-blue-400">
+                            {myScoreVal !== undefined ? myScoreVal : "-"}
+                          </td>
+                          <td className="p-3 text-center font-bold text-yellow-500">
+                            {isRevealed && rankData?.avg > 0 ? rankData.avg : <span className="text-slate-600">???</span>}
+                          </td>
+                          <td className="p-3 text-center">
+                            {isRevealed && rankData?.avg > 0 ? (
+                              <span className={`inline-block w-6 h-6 rounded text-xs leading-6 
+                                ${rankIndex === 1 ? 'bg-yellow-500 text-black' : 
+                                  rankIndex === 2 ? 'bg-slate-400 text-black' : 
+                                  rankIndex === 3 ? 'bg-amber-700 text-white' : 'bg-slate-700'}`}>
+                                {rankIndex}
+                              </span>
+                            ) : "-"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* --- PREDICTION PHASE --- */}
         {displayPhase === 'PREDICTION' && (
@@ -652,10 +741,7 @@ export default function App() {
               <button 
                 onClick={() => {
                   if (gameState.phase === 'SCORING') {
-                    updateGameState({
-                      currentComedianIndex: Math.max(0, gameState.currentComedianIndex - 1),
-                      isScoreRevealed: false
-                    })
+                    adminChangeComedian(Math.max(0, gameState.currentComedianIndex - 1));
                   }
                 }}
                 className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"
@@ -663,7 +749,7 @@ export default function App() {
 
               {gameState.phase === 'SCORING' ? (
                 <button 
-                  onClick={() => updateGameState({isScoreRevealed: !gameState.isScoreRevealed})}
+                  onClick={adminToggleReveal}
                   className={`flex-1 py-3 font-bold rounded-lg flex items-center justify-center gap-2 transition-colors
                     ${gameState.isScoreRevealed ? 'bg-slate-800 text-slate-300' : 'bg-red-600 hover:bg-red-500 text-white'}`}
                 >
@@ -680,13 +766,10 @@ export default function App() {
                   if (gameState.phase === 'PREDICTION') {
                     updateGameState({phase: 'PREDICTION_REVEAL'});
                   } else if (gameState.phase === 'PREDICTION_REVEAL') {
-                    updateGameState({phase: 'SCORING', currentComedianIndex: 0, isScoreRevealed: false});
+                    // 最初のコンビへ
+                    adminChangeComedian(0);
                   } else if (gameState.currentComedianIndex < 9) {
-                    updateGameState({
-                      currentComedianIndex: gameState.currentComedianIndex + 1,
-                      isScoreRevealed: false,
-                      phase: 'SCORING'
-                    });
+                    adminChangeComedian(gameState.currentComedianIndex + 1);
                   } else {
                     updateGameState({phase: 'FINISHED'});
                   }
