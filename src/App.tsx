@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, update, set } from "firebase/database";
-import { Trophy, Mic, Crown, Save, BarChart3, Settings, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, PlayCircle, CheckCircle2 } from 'lucide-react';
+import { Trophy, Mic, Crown, Save, BarChart3, Settings, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, PlayCircle, CheckCircle2, UserCheck } from 'lucide-react';
 
 // ------------------------------------------------------------------
 // 【重要】ここをあなたのFirebase設定に書き換えてください
@@ -48,25 +48,46 @@ export default function App() {
   });
 
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
+  const [allPredictions, setAllPredictions] = useState({}); // 全員の予想データ
   const [scores, setScores] = useState({});
   const [myCurrentScore, setMyCurrentScore] = useState(85);
   const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
   const [editingComedianName, setEditingComedianName] = useState("");
+  const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false); // 自分の予想送信済みフラグ
 
   // Firebase同期
   useEffect(() => {
     if (!db) return;
+    
+    // ゲーム状態
     const unsubGame = onValue(ref(db, `${DB_ROOT}/gameState`), (snap) => {
       const data = snap.val();
       if (data) setGameState(data);
     });
+    
+    // 採点データ
     const unsubScores = onValue(ref(db, `${DB_ROOT}/scores`), (snap) => {
       setScores(snap.val() || {});
     });
-    return () => { unsubGame(); unsubScores(); };
+
+    // 予想データ (追加)
+    const unsubPredictions = onValue(ref(db, `${DB_ROOT}/predictions`), (snap) => {
+      const data = snap.val() || {};
+      setAllPredictions(data);
+    });
+
+    return () => { unsubGame(); unsubScores(); unsubPredictions(); };
   }, []);
 
-  // コンビ変更時にリセット
+  // ログイン時に過去の自分の予想があれば復元
+  useEffect(() => {
+    if (user && allPredictions[user.name]) {
+      setMyPrediction(allPredictions[user.name]);
+      setIsPredictionSubmitted(true);
+    }
+  }, [user, allPredictions]);
+
+  // コンビ変更時に採点状態リセット
   useEffect(() => {
     setMyCurrentScore(85);
     setIsScoreSubmitted(false);
@@ -76,6 +97,21 @@ export default function App() {
     e.preventDefault();
     if (!loginName) return;
     setUser({ name: loginName, isAdmin: isAdminLogin });
+  };
+
+  // 予想を送信 (追加)
+  const submitPrediction = () => {
+    if (!db || !user) return;
+    if (!myPrediction.first || !myPrediction.second || !myPrediction.third) {
+      alert("1位〜3位まですべて選択してください");
+      return;
+    }
+    // predictions/ユーザー名 に保存
+    update(ref(db, `${DB_ROOT}/predictions/${user.name}`), {
+      ...myPrediction,
+      name: user.name
+    });
+    setIsPredictionSubmitted(true);
   };
 
   const submitScore = () => {
@@ -92,6 +128,8 @@ export default function App() {
 
   const adminInit = () => {
     if (!db) return;
+    if(!window.confirm("本当にデータを全て初期化しますか？")) return;
+    
     set(ref(db, `${DB_ROOT}/gameState`), {
       phase: 'PREDICTION',
       currentComedianIndex: 0,
@@ -99,6 +137,7 @@ export default function App() {
       comedians: INITIAL_COMEDIANS
     });
     set(ref(db, `${DB_ROOT}/scores`), {});
+    set(ref(db, `${DB_ROOT}/predictions`), {}); // 予想もクリア
     alert("リセットしました");
   };
 
@@ -152,7 +191,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* ★改善点: 現在のフェーズを表示するステータスバー */}
+      {/* ステータスバー */}
       <div style={{
         textAlign: 'center', padding: '0.5rem', fontWeight: 'bold', fontSize: '0.9rem',
         background: gameState.phase === 'PREDICTION' ? '#2563eb' : (gameState.phase === 'SCORING' ? '#b91c1c' : '#059669'),
@@ -179,18 +218,44 @@ export default function App() {
                   <select 
                     style={{flex: 1, padding: "0.8rem", borderRadius: "6px", background: "#1e293b", color: "white", border: "1px solid #475569"}}
                     value={i===0?myPrediction.first:i===1?myPrediction.second:myPrediction.third}
-                    onChange={(e) => setMyPrediction({...myPrediction, [i===0?'first':i===1?'second':'third']: e.target.value})}
+                    onChange={(e) => {
+                      setMyPrediction({...myPrediction, [i===0?'first':i===1?'second':'third']: e.target.value});
+                      setIsPredictionSubmitted(false); // 変更したら未送信状態に
+                    }}
                   >
                     <option value="">選択...</option>
                     {gameState.comedians.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
               ))}
+              
+              <button 
+                onClick={submitPrediction}
+                disabled={isPredictionSubmitted}
+                style={{
+                  marginTop: "1rem", padding: "1rem", borderRadius: "8px", border: "none", cursor: "pointer",
+                  background: isPredictionSubmitted ? "#059669" : "#eab308", 
+                  color: isPredictionSubmitted ? "white" : "black",
+                  fontWeight: "bold", fontSize: "1.1rem", display: "flex", justifyContent: "center", alignItems: "center", gap: "8px"
+                }}
+              >
+                {isPredictionSubmitted ? <><CheckCircle2 size={20}/> 予想を保存しました</> : <><Save size={20}/> 予想を保存する</>}
+              </button>
             </div>
             
-            <div style={{marginTop: "3rem", padding: "1.5rem", background: "#1e293b", borderRadius: "8px"}}>
-              <p style={{fontWeight: "bold", marginBottom: "0.5rem", color: "#60a5fa"}}>待機中...</p>
-              <p style={{fontSize: "0.9rem", color: "#94a3b8"}}>全員の予想が終わったら、管理者が「採点フェーズ」へ切り替えます。<br/>そのままお待ちください。</p>
+            {/* 予想提出状況リスト */}
+            <div style={{marginTop: "3rem", padding: "1.5rem", background: "#1e293b", borderRadius: "8px", textAlign: "left"}}>
+              <p style={{fontSize: "0.9rem", color: "#94a3b8", marginBottom: "1rem", display: "flex", alignItems: "center", gap: "6px"}}>
+                <UserCheck size={16}/> 予想済みのメンバー ({Object.keys(allPredictions).length}人)
+              </p>
+              <div style={{display: "flex", flexWrap: "wrap", gap: "8px"}}>
+                {Object.keys(allPredictions).length === 0 && <span style={{fontSize: "0.8rem", color: "#64748b"}}>まだ誰も提出していません</span>}
+                {Object.keys(allPredictions).map(name => (
+                  <span key={name} style={{background: "#334155", padding: "4px 10px", borderRadius: "20px", fontSize: "0.85rem", color: "white"}}>
+                    {name}
+                  </span>
+                ))}
+              </div>
             </div>
 
             {user.isAdmin && (
