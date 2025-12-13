@@ -2,10 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 基本設定：背景色を黒っぽく、文字を白く */
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  background-color: #0f172a; /* 暗い色 */
+  background-color: #0f172a;
   color: white;
 }
 
@@ -13,23 +12,4 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-}
-
-/* スクロールバーをカッコよくする */
-::-webkit-scrollbar {
-  width: 8px;
-}
-::-webkit-scrollbar-track {
-  background: #0f172a;
-}
-::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 4px;
-}
-
-/* ボタンなどのレイアウト用 */
-.container {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 1rem;
 }
