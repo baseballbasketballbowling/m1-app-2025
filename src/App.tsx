@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, update, set } from "firebase/database";
-import { Trophy, Mic, Crown, Save, BarChart3, Settings, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, PlayCircle, CheckCircle2, UserCheck, LogOut } from 'lucide-react';
+import { getDatabase, ref, onValue, set, update, push, child } from "firebase/database";
+import { 
+  Trophy, Mic, Crown, Save, BarChart3, Settings, 
+  ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
+  CheckCircle2, UserCheck, LogOut, Loader2, Users 
+} from 'lucide-react';
 
 // ------------------------------------------------------------------
-// 現在のアプリバージョン (更新したらここを変える)
+// 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v1.2.1 (表示修正版)";
+const APP_VERSION = "v2.0 (Stable)";
 
-// ------------------------------------------------------------------
 // あなたのFirebase設定
-// ------------------------------------------------------------------
 const firebaseConfig = {
   apiKey: "AIzaSyCvMn1srEPkKRujzDZDfpmRFJmLxwX65NE",
   authDomain: "m1-app-1e177.firebaseapp.com",
@@ -21,13 +23,7 @@ const firebaseConfig = {
   databaseURL: "https://m1-app-1e177-default-rtdb.firebaseio.com"
 };
 
-// Firebase初期化チェック
-const isConfigured = firebaseConfig.apiKey !== "YOUR_API_KEY_HERE";
-const app = isConfigured ? initializeApp(firebaseConfig) : null;
-const db = app ? getDatabase(app) : null;
-const DB_ROOT = 'm1_2025_v1';
-
-// コンビ名リスト
+// コンビ名リスト（2025年版想定）
 const INITIAL_COMEDIANS = [
   { id: 1, name: "エバース" },
   { id: 2, name: "豪快キャプテン" },
@@ -41,352 +37,384 @@ const INITIAL_COMEDIANS = [
   { id: 10, name: "敗者復活組" } 
 ];
 
+// Firebase初期化
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+const DB_ROOT = 'm1_2025_v2'; // バージョンを変えてデータをクリーンにする
+
+// ------------------------------------------------------------------
+// コンポーネント実装
+// ------------------------------------------------------------------
+
 export default function App() {
-  const [user, setUser] = useState(null);
+  // --- User State ---
+  const [user, setUser] = useState<{name: string, isAdmin: boolean} | null>(null);
   const [loginName, setLoginName] = useState("");
   const [isAdminLogin, setIsAdminLogin] = useState(false);
 
+  // --- Game Data State ---
   const [gameState, setGameState] = useState({
-    phase: 'PREDICTION', 
+    phase: 'PREDICTION', // PREDICTION | SCORING | FINISHED
     currentComedianIndex: 0,
     isScoreRevealed: false,
     comedians: INITIAL_COMEDIANS,
   });
+  
+  const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
+  const [predictions, setPredictions] = useState<Record<string, any>>({});
 
+  // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
-  const [allPredictions, setAllPredictions] = useState({}); // 全員の予想データ
-  const [scores, setScores] = useState({});
-  const [myCurrentScore, setMyCurrentScore] = useState(85);
+  const [myScore, setMyScore] = useState(85);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
-  const [editingComedianName, setEditingComedianName] = useState("");
-  const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false); // 自分の予想送信済みフラグ
+  const [editingName, setEditingName] = useState("");
 
-  // ローカルストレージからログイン情報を復元（リロード対策）
+  // 1. ログイン復元 & Firebase同期
   useEffect(() => {
-    const savedUser = localStorage.getItem('m1_user_v2');
-    if (savedUser) {
-      try {
-        setUser(JSON.parse(savedUser));
-      } catch (e) {
-        console.error("Login restore failed", e);
-      }
+    // ログイン復元
+    const saved = localStorage.getItem('m1_user_v2');
+    if (saved) {
+      try { setUser(JSON.parse(saved)); } catch(e) {}
     }
+
+    // データ同期リスナー
+    const gameRef = ref(db, `${DB_ROOT}/gameState`);
+    const scoresRef = ref(db, `${DB_ROOT}/scores`);
+    const predsRef = ref(db, `${DB_ROOT}/predictions`);
+
+    const unsubGame = onValue(gameRef, (snap) => {
+      const val = snap.val();
+      if (val) setGameState(val);
+    });
+    const unsubScores = onValue(scoresRef, (snap) => setScores(snap.val() || {}));
+    const unsubPreds = onValue(predsRef, (snap) => setPredictions(snap.val() || {}));
+
+    return () => { unsubGame(); unsubScores(); unsubPreds(); };
   }, []);
 
-  // Firebase同期
+  // 2. 自分の予想データの反映
   useEffect(() => {
-    if (!db) return;
-    
-    // ゲーム状態
-    const unsubGame = onValue(ref(db, `${DB_ROOT}/gameState`), (snap) => {
-      const data = snap.val();
-      if (data) setGameState(data);
-    });
-    
-    // 採点データ
-    const unsubScores = onValue(ref(db, `${DB_ROOT}/scores`), (snap) => {
-      setScores(snap.val() || {});
-    });
-
-    // 予想データ
-    const unsubPredictions = onValue(ref(db, `${DB_ROOT}/predictions`), (snap) => {
-      const data = snap.val() || {};
-      setAllPredictions(data);
-    });
-
-    return () => { unsubGame(); unsubScores(); unsubPredictions(); };
-  }, []);
-
-  // ログイン時に過去の自分の予想があれば復元
-  useEffect(() => {
-    if (user && allPredictions[user.name]) {
-      setMyPrediction(allPredictions[user.name]);
-      setIsPredictionSubmitted(true);
+    if (user && predictions[user.name]) {
+      setMyPrediction(predictions[user.name]);
     }
-  }, [user, allPredictions]);
+  }, [user, predictions]);
 
-  // コンビ変更時に採点状態リセット
+  // 3. コンビ切り替え時のリセット
   useEffect(() => {
-    setMyCurrentScore(85);
+    setMyScore(85);
     setIsScoreSubmitted(false);
   }, [gameState.currentComedianIndex]);
 
-  const handleLogin = (e) => {
+
+  // --- Actions ---
+
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loginName) return;
-    // ユーザー名に禁止文字が含まれていないかチェック
-    if (loginName.includes('.') || loginName.includes('#') || loginName.includes('$') || loginName.includes('[') || loginName.includes(']')) {
-      alert("ニックネームに記号（. # $ [ ]）は使用できません");
+    if (!loginName.trim()) return;
+    // 禁止文字チェック
+    if (/[.#$[\]]/.test(loginName)) {
+      alert("名前に . # $ [ ] は使えません");
       return;
     }
-
-    const userData = { name: loginName, isAdmin: isAdminLogin };
+    const userData = { name: loginName.trim(), isAdmin: isAdminLogin };
     setUser(userData);
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
   };
 
   const handleLogout = () => {
-    if(window.confirm("ログアウトしますか？")) {
+    if (confirm("ログアウトしますか？")) {
       localStorage.removeItem('m1_user_v2');
       setUser(null);
       setLoginName("");
     }
   };
 
-  // 予想を送信 (ロジック修正: setを使用し、完了を待機)
-  const submitPrediction = () => {
-    if (!db || !user) return;
+  // 予想を保存
+  const savePrediction = async () => {
+    if (!user) return;
     if (!myPrediction.first || !myPrediction.second || !myPrediction.third) {
       alert("1位〜3位まですべて選択してください");
       return;
     }
-
-    // setを使ってデータを「置く」形に変更。then/catchで成功確認を行う
-    set(ref(db, `${DB_ROOT}/predictions/${user.name}`), {
-      ...myPrediction,
-      name: user.name
-    })
-    .then(() => {
-      setIsPredictionSubmitted(true);
+    setIsSubmitting(true);
+    try {
+      await set(ref(db, `${DB_ROOT}/predictions/${user.name}`), {
+        ...myPrediction,
+        updatedAt: Date.now()
+      });
       alert("予想を保存しました！");
-    })
-    .catch((error) => {
-      console.error("Prediction save error:", error);
-      alert("保存に失敗しました。もう一度お試しください。\n" + error.message);
-    });
+    } catch (error: any) {
+      alert("保存失敗: " + error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const submitScore = () => {
-    if (!db || !user) return;
-    const comedianId = gameState.comedians[gameState.currentComedianIndex].id;
-    set(ref(db, `${DB_ROOT}/scores/${comedianId}/${user.name}`), myCurrentScore)
-      .then(() => setIsScoreSubmitted(true))
-      .catch((err) => alert("採点の送信に失敗しました: " + err.message));
+  // 採点を送信
+  const sendScore = async () => {
+    if (!user) return;
+    setIsSubmitting(true);
+    try {
+      const comedianId = gameState.comedians[gameState.currentComedianIndex].id;
+      await set(ref(db, `${DB_ROOT}/scores/${comedianId}/${user.name}`), myScore);
+      setIsScoreSubmitted(true);
+    } catch (error: any) {
+      alert("送信失敗: " + error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const adminUpdate = (updates) => {
-    if (!db) return;
+  // --- Admin Actions ---
+  const updateGameState = (updates: any) => {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
 
-  const adminInit = () => {
-    if (!db) return;
-    if(!window.confirm("【注意】本当にデータを全て初期化しますか？\n全員の予想と採点データが消えます。")) return;
-    
-    set(ref(db, `${DB_ROOT}/gameState`), {
-      phase: 'PREDICTION',
-      currentComedianIndex: 0,
-      isScoreRevealed: false,
-      comedians: INITIAL_COMEDIANS
+  const resetDatabase = async () => {
+    if (!confirm("【危険】全データを消去してリセットしますか？")) return;
+    await set(ref(db, `${DB_ROOT}`), {
+      gameState: {
+        phase: 'PREDICTION',
+        currentComedianIndex: 0,
+        isScoreRevealed: false,
+        comedians: INITIAL_COMEDIANS
+      },
+      scores: {},
+      predictions: {}
     });
-    set(ref(db, `${DB_ROOT}/scores`), {});
-    set(ref(db, `${DB_ROOT}/predictions`), {});
-    alert("データベースをリセットしました");
+    alert("リセット完了");
   };
 
-  const currentRanking = useMemo(() => {
+  // --- Helpers ---
+  const currentComedian = gameState.comedians[gameState.currentComedianIndex];
+  
+  // ランキング計算
+  const ranking = useMemo(() => {
     return gameState.comedians.map(c => {
       const cScores = scores[c.id] || {};
-      const values = Object.values(cScores);
-      const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : 0;
+      const values = Object.values(cScores) as number[];
+      const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       return { ...c, avg: parseFloat(avg) };
     }).sort((a, b) => b.avg - a.avg);
   }, [scores, gameState.comedians]);
 
-  // --- UI RENDER ---
 
-  if (!isConfigured) {
-    return (
-      <div style={{padding: "2rem", textAlign: "center", color: "#ef4444"}}>
-        <AlertCircle size={48} style={{margin: "0 auto 1rem"}}/>
-        <h2>Firebaseの設定が必要です</h2>
-        <p>App.tsxのコード内の <code>firebaseConfig</code> をあなたのキーに書き換えてください。</p>
-      </div>
-    );
-  }
+  // =================================================================
+  // RENDER
+  // =================================================================
 
   if (!user) {
     return (
-      <div className="container" style={{textAlign: "center", marginTop: "4rem"}}>
-        <Trophy size={64} color="#eab308" style={{margin: "0 auto 1rem"}}/>
-        <h1 style={{fontSize: "2rem", fontWeight: "bold", marginBottom: "2rem", color: "#eab308"}}>M-1 SCORING 2025</h1>
-        <form onSubmit={handleLogin} style={{display: "flex", flexDirection: "column", gap: "1rem", maxWidth: "300px", margin: "0 auto"}}>
-          <input type="text" placeholder="ニックネーム" value={loginName} onChange={(e) => setLoginName(e.target.value)}
-            style={{padding: "1rem", borderRadius: "8px", border: "1px solid #475569", background: "#1e293b", color: "white"}} />
-          <label style={{display: "flex", alignItems: "center", gap: "0.5rem", color: "#94a3b8", fontSize: "0.9rem"}}>
-            <input type="checkbox" checked={isAdminLogin} onChange={(e) => setIsAdminLogin(e.target.checked)}/> 管理者モード
-          </label>
-          <button type="submit" style={{padding: "1rem", borderRadius: "8px", background: "#dc2626", color: "white", fontWeight: "bold", border: "none", cursor: "pointer"}}>エントリー</button>
-        </form>
-        <div style={{marginTop: "2rem", color: "#cbd5e1", fontSize: "0.8rem", fontFamily: "monospace", background: "rgba(255,255,255,0.1)", display: "inline-block", padding: "4px 8px", borderRadius: "4px"}}>
-           App Version: {APP_VERSION}
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-slate-900 p-8 rounded-xl border border-slate-800 shadow-2xl">
+          <div className="text-center mb-8">
+            <Trophy className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
+            <h1 className="text-3xl font-black text-white mb-2 tracking-tighter">M-1 VOTING</h1>
+            <p className="text-slate-400">Realtime Scoring App</p>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-slate-400 text-sm mb-1">ニックネーム</label>
+              <input 
+                type="text" 
+                value={loginName}
+                onChange={e => setLoginName(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded p-3 text-white focus:ring-2 focus:ring-yellow-500 outline-none"
+                placeholder="例: 田中"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-slate-400 text-sm cursor-pointer">
+              <input type="checkbox" checked={isAdminLogin} onChange={e => setIsAdminLogin(e.target.checked)} />
+              管理者モード（進行操作）
+            </label>
+            <button type="submit" className="w-full bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white font-bold py-3 rounded-lg transition-all transform active:scale-95">
+              参加する
+            </button>
+          </form>
+          <div className="mt-6 text-center text-slate-600 text-xs font-mono">{APP_VERSION}</div>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{paddingBottom: "140px"}}>
-      {/* ヘッダー */}
-      <header style={{background: "#1e293b", padding: "1rem", position: "sticky", top: 0, zIndex: 10, borderBottom: "1px solid #334155"}}>
-        <div className="container" style={{display: "flex", justifyContent: "space-between", alignItems: "center", padding: 0}}>
-          <div style={{fontWeight: "bold", display: "flex", alignItems: "center", gap: "0.5rem"}}>
-            <span style={{background: "#eab308", color: "black", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem"}}>M-1</span> SCORING
-          </div>
-          <div style={{fontSize: "0.9rem", color: "#cbd5e1", display: "flex", alignItems: "center", gap: "10px"}}>
-            <span>{user.name} {user.isAdmin && "★"}</span>
-            <button onClick={handleLogout} style={{background: "transparent", border: "none", color: "#64748b", cursor: "pointer", padding: "4px"}}>
-              <LogOut size={16} />
-            </button>
-          </div>
+    <div className="min-h-screen bg-slate-950 text-slate-100 pb-32 font-sans">
+      
+      {/* Header */}
+      <header className="sticky top-0 z-20 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex justify-between items-center shadow-md">
+        <div className="flex items-center gap-2 font-bold">
+          <span className="bg-yellow-500 text-black px-1.5 py-0.5 rounded text-xs">M-1</span>
+          <span>VOTING</span>
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          <span className="bg-slate-800 px-3 py-1 rounded-full border border-slate-700 flex items-center gap-1">
+            {user.name} {user.isAdmin && <span className="text-yellow-500">★</span>}
+          </span>
+          <button onClick={handleLogout} className="text-slate-500 hover:text-white"><LogOut size={18}/></button>
         </div>
       </header>
 
-      {/* ステータスバー */}
-      <div style={{
-        textAlign: 'center', padding: '0.5rem', fontWeight: 'bold', fontSize: '0.9rem',
-        background: gameState.phase === 'PREDICTION' ? '#2563eb' : (gameState.phase === 'SCORING' ? '#b91c1c' : '#059669'),
-        color: 'white', borderBottom: '1px solid rgba(255,255,255,0.1)', transition: 'background 0.3s'
-      }}>
+      {/* Phase Banner */}
+      <div className={`text-center py-2 text-sm font-bold text-white shadow-lg transition-colors duration-300
+        ${gameState.phase === 'PREDICTION' ? 'bg-blue-600' : gameState.phase === 'SCORING' ? 'bg-red-700' : 'bg-green-600'}`}>
         {gameState.phase === 'PREDICTION' && "🏆 3連単予想 受付中"}
-        {gameState.phase === 'SCORING' && `🎤 採点進行中 (No.${gameState.currentComedianIndex + 1})`}
-        {gameState.phase === 'FINISHED' && "✨ 大会終了"}
+        {gameState.phase === 'SCORING' && `🎤 No.${gameState.currentComedianIndex + 1} ${currentComedian?.name} 採点中`}
+        {gameState.phase === 'FINISHED' && "✨ 全日程終了 ✨"}
       </div>
 
-      <main className="container">
-        
-        {/* フェーズ1: 予想 */}
+      <main className="p-4 max-w-2xl mx-auto space-y-6">
+
+        {/* --- PREDICTION PHASE --- */}
         {gameState.phase === 'PREDICTION' && (
-          <div style={{textAlign: "center", padding: "2rem 0"}}>
-            <Crown size={48} color="#eab308" style={{margin: "0 auto 1rem"}}/>
-            <h2 style={{fontSize: "1.5rem", marginBottom: "0.5rem"}}>3連単予想</h2>
-            <p style={{color: "#94a3b8", fontSize: "0.9rem", marginBottom: "2rem"}}>今年のTop3を予想して保存しよう</p>
-            
-            <div style={{display: "flex", flexDirection: "column", gap: "1rem", maxWidth: "400px", margin: "0 auto"}}>
-              {['優勝', '2位', '3位'].map((rank, i) => (
-                <div key={rank} style={{display: "flex", alignItems: "center", gap: "1rem"}}>
-                  <span style={{width: "40px", fontWeight: "bold", color: i===0?"#eab308":i===1?"#cbd5e1":"#b45309"}}>{rank}</span>
-                  <select 
-                    style={{flex: 1, padding: "0.8rem", borderRadius: "6px", background: "#1e293b", color: "white", border: "1px solid #475569"}}
-                    value={i===0?myPrediction.first:i===1?myPrediction.second:myPrediction.third}
-                    onChange={(e) => {
-                      setMyPrediction({...myPrediction, [i===0?'first':i===1?'second':'third']: e.target.value});
-                      setIsPredictionSubmitted(false); // 変更したら未送信状態に
-                    }}
-                  >
-                    <option value="">選択...</option>
-                    {gameState.comedians.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </div>
-              ))}
-              
+          <div className="animate-fade-in space-y-6">
+            <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-xl">
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-yellow-500">
+                <Crown size={24}/> 3連単予想
+              </h2>
+              <div className="space-y-4">
+                {['優勝', '2位', '3位'].map((rank, i) => (
+                  <div key={rank} className="flex items-center gap-3">
+                    <span className={`w-12 font-bold ${i===0?'text-yellow-400':i===1?'text-slate-300':'text-amber-700'}`}>{rank}</span>
+                    <select 
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded p-3 text-white focus:border-yellow-500 outline-none"
+                      value={i===0?myPrediction.first:i===1?myPrediction.second:myPrediction.third}
+                      onChange={(e) => setMyPrediction({...myPrediction, [i===0?'first':i===1?'second':'third']: e.target.value})}
+                    >
+                      <option value="">選択...</option>
+                      {gameState.comedians.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
               <button 
-                onClick={submitPrediction}
-                disabled={isPredictionSubmitted}
-                style={{
-                  marginTop: "1rem", padding: "1rem", borderRadius: "8px", border: "none", cursor: "pointer",
-                  background: isPredictionSubmitted ? "#059669" : "#eab308", 
-                  color: isPredictionSubmitted ? "white" : "black",
-                  fontWeight: "bold", fontSize: "1.1rem", display: "flex", justifyContent: "center", alignItems: "center", gap: "8px"
-                }}
+                onClick={savePrediction} 
+                disabled={isSubmitting}
+                className="mt-6 w-full py-3 bg-yellow-500 hover:bg-yellow-400 disabled:bg-slate-700 text-black font-bold rounded-lg flex items-center justify-center gap-2 transition-all"
               >
-                {isPredictionSubmitted ? <><CheckCircle2 size={20}/> 予想を保存しました</> : <><Save size={20}/> 予想を保存する</>}
+                {isSubmitting ? <Loader2 className="animate-spin"/> : <Save size={20}/>}
+                {isSubmitting ? "保存中..." : "予想を保存する"}
               </button>
             </div>
-            
-            {/* 予想提出状況リスト */}
-            <div style={{marginTop: "3rem", padding: "1.5rem", background: "#1e293b", borderRadius: "8px", textAlign: "left"}}>
-              <p style={{fontSize: "0.9rem", color: "#94a3b8", marginBottom: "1rem", display: "flex", alignItems: "center", gap: "6px"}}>
-                <UserCheck size={16}/> 予想済みのメンバー ({Object.keys(allPredictions).length}人)
-              </p>
-              <div style={{display: "flex", flexWrap: "wrap", gap: "8px"}}>
-                {Object.keys(allPredictions).length === 0 && <span style={{fontSize: "0.8rem", color: "#64748b"}}>まだ誰も提出していません</span>}
-                {Object.keys(allPredictions).map(name => (
-                  <span key={name} style={{background: "#334155", padding: "4px 10px", borderRadius: "20px", fontSize: "0.85rem", color: "white"}}>
-                    {name}
+
+            {/* Participants List */}
+            <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+              <h3 className="text-sm font-bold text-slate-400 mb-4 flex items-center gap-2">
+                <Users size={16}/> 提出済みのメンバー
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {Object.keys(predictions).length === 0 && <span className="text-slate-600 text-sm">まだ誰も提出していません</span>}
+                {Object.keys(predictions).map(name => (
+                  <span key={name} className="px-3 py-1 bg-slate-800 text-slate-200 rounded-full text-sm border border-slate-700 flex items-center gap-1">
+                    <CheckCircle2 size={12} className="text-green-500"/> {name}
                   </span>
                 ))}
               </div>
             </div>
-
-            {user.isAdmin && (
-              <div style={{marginTop: "2rem", borderTop: "1px solid #334155", paddingTop: "1rem"}}>
-                <button onClick={adminInit} style={{background: "#334155", color: "#94a3b8", border: "none", padding: "0.5rem 1rem", borderRadius: "4px", fontSize: "0.8rem"}}>⚠️ DBリセット</button>
-              </div>
-            )}
           </div>
         )}
 
-        {/* フェーズ2: 採点 & 結果 */}
+        {/* --- SCORING & RESULT PHASE --- */}
         {(gameState.phase === 'SCORING' || gameState.phase === 'FINISHED') && (
-          <div>
-            {/* コンビ名カード */}
-            <div style={{
-              background: "linear-gradient(to bottom right, #7f1d1d, #0f172a)", 
-              padding: "2rem", borderRadius: "16px", textAlign: "center", marginBottom: "2rem", border: "1px solid #991b1b",
-              boxShadow: "0 10px 25px -5px rgba(220, 38, 38, 0.3)"
-            }}>
-              <div style={{color: "#fca5a5", fontSize: "0.8rem", letterSpacing: "2px", marginBottom: "0.5rem"}}>ENTRY NO.{gameState.currentComedianIndex + 1}</div>
-              <h2 style={{fontSize: "2.5rem", fontWeight: "900", margin: "0 0 1rem 0", lineHeight: 1.2}}>
-                {gameState.comedians[gameState.currentComedianIndex].name}
-              </h2>
-              {gameState.isScoreRevealed && (
-                 <div style={{fontSize: "3rem", fontWeight: "bold", color: "#eab308", textShadow: "0 0 20px rgba(234, 179, 8, 0.5)"}}>
-                   {currentRanking.find(c => c.id === gameState.comedians[gameState.currentComedianIndex].id)?.avg}
-                   <span style={{fontSize: "1rem", marginLeft: "0.5rem", color: "white", textShadow: "none"}}>点</span>
-                 </div>
-              )}
+          <div className="animate-fade-in space-y-6">
+            
+            {/* Comedian Card */}
+            <div className="relative overflow-hidden bg-gradient-to-br from-red-900 to-slate-900 rounded-2xl p-8 text-center border border-red-900 shadow-2xl">
+              <div className="absolute top-0 right-0 p-4 opacity-10"><Mic size={120}/></div>
+              <div className="relative z-10">
+                <div className="text-red-300 font-bold text-xs tracking-widest mb-2">ENTRY NO.{gameState.currentComedianIndex + 1}</div>
+                <h2 className="text-4xl md:text-5xl font-black text-white mb-4 drop-shadow-lg tracking-tight">
+                  {currentComedian?.name}
+                </h2>
+                {gameState.isScoreRevealed ? (
+                  <div className="inline-flex items-baseline gap-2 bg-black/40 px-6 py-2 rounded-full backdrop-blur-sm border border-yellow-500/30">
+                    <span className="text-sm text-slate-300">平均</span>
+                    <span className="text-5xl font-black text-yellow-400">{ranking.find(c => c.id === currentComedian.id)?.avg}</span>
+                    <span className="text-lg font-bold text-yellow-600">点</span>
+                  </div>
+                ) : (
+                  <div className="h-16 flex items-center justify-center text-slate-400 text-sm animate-pulse">
+                    {gameState.phase === 'SCORING' ? "審査中..." : ""}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* 採点入力エリア */}
-            {!gameState.isScoreRevealed && gameState.phase !== 'FINISHED' && (
-              <div style={{background: "#1e293b", padding: "2rem", borderRadius: "12px", border: "1px solid #334155"}}>
+            {/* Input Area */}
+            {!gameState.isScoreRevealed && gameState.phase === 'SCORING' && (
+              <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
                 {!isScoreSubmitted ? (
                   <>
-                    <div style={{textAlign: "center", fontSize: "4rem", fontWeight: "bold", marginBottom: "1rem", fontFamily: "monospace"}}>{myCurrentScore}</div>
-                    <input type="range" min="50" max="100" value={myCurrentScore} onChange={(e) => setMyCurrentScore(parseInt(e.target.value))}
-                      style={{width: "100%", marginBottom: "2rem", accentColor: "#eab308", height: "10px", cursor: "pointer"}} />
-                    <button onClick={submitScore} style={{width: "100%", padding: "1rem", background: "#eab308", color: "black", fontWeight: "bold", fontSize: "1.2rem", borderRadius: "8px", border: "none", display: "flex", justifyContent: "center", gap: "0.5rem", alignItems: "center", cursor: "pointer"}}>
-                      <Save size={24}/> 採点を確定する
+                    <div className="text-center mb-6">
+                      <div className="text-7xl font-black text-white mb-4 tabular-nums">{myScore}</div>
+                      <input 
+                        type="range" min="50" max="100" value={myScore} 
+                        onChange={e => setMyScore(parseInt(e.target.value))}
+                        className="w-full h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                      />
+                      <div className="flex justify-between text-xs text-slate-500 mt-2"><span>50</span><span>100</span></div>
+                    </div>
+                    <button 
+                      onClick={sendScore}
+                      disabled={isSubmitting}
+                      className="w-full py-4 bg-yellow-500 hover:bg-yellow-400 text-black font-black text-xl rounded-lg shadow-lg shadow-yellow-500/20 transform transition active:scale-95 disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2"
+                    >
+                      {isSubmitting ? <Loader2 className="animate-spin"/> : <Save/>}
+                      {isSubmitting ? "送信中..." : "採点を確定する"}
                     </button>
                   </>
                 ) : (
-                  <div style={{textAlign: "center", padding: "2rem"}}>
-                    <CheckCircle2 size={48} color="#22c55e" style={{margin: "0 auto 1rem"}}/>
-                    <h3 style={{fontSize: "1.5rem", marginBottom: "0.5rem"}}>採点完了！</h3>
-                    <p style={{color: "#94a3b8"}}>結果発表を待っています...</p>
-                    <button onClick={() => setIsScoreSubmitted(false)} style={{background: "none", border: "none", color: "#cbd5e1", textDecoration: "underline", marginTop: "1rem", cursor: "pointer"}}>修正する</button>
+                  <div className="text-center py-8">
+                    <div className="w-16 h-16 bg-green-900/30 text-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <CheckCircle2 size={32}/>
+                    </div>
+                    <h3 className="text-xl font-bold text-white mb-2">採点完了</h3>
+                    <p className="text-slate-400 text-sm">結果発表をお待ちください</p>
+                    <button onClick={() => setIsScoreSubmitted(false)} className="mt-4 text-sm text-slate-500 hover:text-white underline">
+                      修正する
+                    </button>
                   </div>
                 )}
               </div>
             )}
 
-            {/* 結果表示エリア */}
+            {/* Result Area */}
             {gameState.isScoreRevealed && (
-              <div style={{display: "flex", flexDirection: "column", gap: "1rem"}}>
-                <div style={{background: "#1e293b", borderRadius: "12px", padding: "1rem"}}>
-                  <div style={{fontSize: "0.9rem", color: "#94a3b8", marginBottom: "1rem", display: "flex", alignItems: "center", gap: "0.5rem"}}><BarChart3 size={16}/> 審査員別スコア</div>
-                  <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))", gap: "0.5rem"}}>
-                    {Object.entries(scores[gameState.comedians[gameState.currentComedianIndex].id] || {}).map(([name, score]) => (
-                      <div key={name} style={{background: "#334155", padding: "0.8rem", borderRadius: "6px", textAlign: "center", border: name===user.name?"1px solid #3b82f6":"none"}}>
-                        <div style={{fontSize: "0.7rem", color: "#cbd5e1", marginBottom: "4px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{name}</div>
-                        <div style={{fontSize: "1.2rem", fontWeight: "bold", color: score>=95?"#eab308":score>=90?"#f87171":"white"}}>{score}</div>
+              <div className="space-y-4">
+                {/* Score Grid */}
+                <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
+                  <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300">
+                    <BarChart3 size={16}/> 審査員別スコア
+                  </div>
+                  <div className="p-4 grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {Object.entries(scores[currentComedian.id] || {}).map(([name, score]) => (
+                      <div key={name} className={`p-2 rounded text-center border ${name===user.name ? 'bg-slate-800 border-blue-500/50' : 'bg-slate-800 border-transparent'}`}>
+                        <div className="text-[10px] text-slate-400 truncate mb-1">{name}</div>
+                        <div className={`text-xl font-black ${score>=95 ? 'text-yellow-500' : score>=90 ? 'text-red-400' : 'text-white'}`}>{score}</div>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                <div style={{background: "#1e293b", borderRadius: "12px", padding: "1rem"}}>
-                  <div style={{fontSize: "0.9rem", color: "#94a3b8", marginBottom: "1rem", display: "flex", alignItems: "center", gap: "0.5rem"}}><Trophy size={16}/> 現在のランキング</div>
-                  {currentRanking.filter(c => c.avg > 0).map((c, i) => (
-                    <div key={c.id} style={{display: "flex", justifyContent: "space-between", padding: "0.8rem 0", borderBottom: "1px solid #334155"}}>
-                       <div style={{display: "flex", gap: "1rem", alignItems: "center"}}>
-                         <span style={{width: "24px", height: "24px", background: i===0?"#eab308":i===1?"#94a3b8":i===2?"#b45309":"#334155", color: i<3?"black":"white", borderRadius: "4px", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "bold", fontSize: "0.8rem"}}>{i+1}</span>
-                         <span style={{fontWeight: "bold"}}>{c.name}</span>
-                       </div>
-                       <span style={{fontWeight: "bold", color: "#eab308", fontSize: "1.2rem"}}>{c.avg}</span>
-                    </div>
-                  ))}
+                {/* Ranking Table */}
+                <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
+                  <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300">
+                    <Trophy size={16}/> 現在の順位
+                  </div>
+                  <div className="divide-y divide-slate-800">
+                    {ranking.filter(c => c.avg > 0).map((c, i) => (
+                      <div key={c.id} className={`flex items-center justify-between p-3 ${c.id===currentComedian.id ? 'bg-yellow-500/5' : ''}`}>
+                        <div className="flex items-center gap-3">
+                          <span className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold 
+                            ${i===0 ? 'bg-yellow-500 text-black' : i===1 ? 'bg-slate-400 text-black' : i===2 ? 'bg-amber-700 text-white' : 'bg-slate-800 text-slate-500'}`}>
+                            {i+1}
+                          </span>
+                          <span className="font-bold text-sm">{c.name}</span>
+                        </div>
+                        <span className="font-bold text-yellow-500">{c.avg}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
@@ -394,65 +422,91 @@ export default function App() {
         )}
       </main>
 
-      {/* 管理者パネル (デザイン改善) */}
+      {/* --- ADMIN PANEL --- */}
       {user.isAdmin && (
-        <div style={{position: "fixed", bottom: 0, left: 0, right: 0, background: "#0f172a", borderTop: "1px solid #334155", padding: "1rem", zIndex: 100}}>
-          <div className="container" style={{padding: 0}}>
-            <div style={{display: "flex", justifyContent: "space-between", marginBottom: "1rem", alignItems: "center"}}>
-              <div style={{color: "#ef4444", fontSize: "0.8rem", fontWeight: "bold", display: "flex", alignItems: "center", gap: "4px"}}><Settings size={12}/> 管理者パネル</div>
-              <div style={{display: "flex", gap: "0.5rem", background: "#1e293b", padding: "4px", borderRadius: "6px"}}>
-                <button onClick={() => adminUpdate({phase: 'PREDICTION'})} 
-                  style={{fontSize: "0.7rem", padding: "6px 12px", background: gameState.phase==='PREDICTION'?"#2563eb":"transparent", color: "white", border: "none", borderRadius: "4px", fontWeight: gameState.phase==='PREDICTION'?"bold":"normal", cursor: "pointer"}}>予想フェーズ</button>
-                <button onClick={() => adminUpdate({phase: 'SCORING'})} 
-                  style={{fontSize: "0.7rem", padding: "6px 12px", background: gameState.phase==='SCORING'?"#dc2626":"transparent", color: "white", border: "none", borderRadius: "4px", fontWeight: gameState.phase==='SCORING'?"bold":"normal", cursor: "pointer"}}>採点フェーズ</button>
+        <div className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-4 pb-8 z-50 shadow-2xl">
+          <div className="max-w-2xl mx-auto space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold text-red-500 flex items-center gap-1"><Settings size={12}/> ADMIN</div>
+              <div className="flex bg-slate-800 rounded p-1">
+                <button 
+                  onClick={() => updateGameState({phase: 'PREDICTION'})}
+                  className={`px-3 py-1 rounded text-xs ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                >予想</button>
+                <button 
+                  onClick={() => updateGameState({phase: 'SCORING'})}
+                  className={`px-3 py-1 rounded text-xs ${gameState.phase==='SCORING' ? 'bg-red-600 text-white' : 'text-slate-400'}`}
+                >採点</button>
               </div>
             </div>
-            
-            <div style={{display: "flex", gap: "0.5rem", alignItems: "center"}}>
-               <button onClick={() => adminUpdate({currentComedianIndex: Math.max(0, gameState.currentComedianIndex - 1), isScoreRevealed: false})} style={{background: "#334155", border: "none", color: "white", padding: "0.8rem", borderRadius: "8px", cursor: "pointer"}}><ChevronLeft/></button>
-               
-               {gameState.phase === 'SCORING' ? (
-                 <button onClick={() => adminUpdate({isScoreRevealed: !gameState.isScoreRevealed})} style={{flex: 1, background: gameState.isScoreRevealed?"#334155":"#dc2626", color: "white", border: "none", borderRadius: "8px", fontWeight: "bold", padding: "0.8rem", cursor: "pointer", display: "flex", justifyContent: "center", alignItems: "center", gap: "8px"}}>
-                   {gameState.isScoreRevealed ? <><EyeOff size={18}/> CLOSE</> : <><Eye size={18}/> 結果オープン</>}
-                 </button>
-               ) : (
-                 <div style={{flex: 1, textAlign: "center", color: "#64748b", fontSize: "0.8rem", background: "#1e293b", padding: "0.8rem", borderRadius: "8px"}}>ここは予想フェーズです</div>
-               )}
 
-               <button onClick={() => gameState.currentComedianIndex < 9 ? adminUpdate({currentComedianIndex: gameState.currentComedianIndex + 1, isScoreRevealed: false, phase: 'SCORING'}) : adminUpdate({phase: 'FINISHED'})} style={{background: "#334155", border: "none", color: "white", padding: "0.8rem", borderRadius: "8px", cursor: "pointer"}}><ChevronRight/></button>
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => updateGameState({
+                  currentComedianIndex: Math.max(0, gameState.currentComedianIndex - 1),
+                  isScoreRevealed: false
+                })}
+                className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"
+              ><ChevronLeft/></button>
+
+              {gameState.phase === 'SCORING' ? (
+                <button 
+                  onClick={() => updateGameState({isScoreRevealed: !gameState.isScoreRevealed})}
+                  className={`flex-1 py-3 font-bold rounded-lg flex items-center justify-center gap-2 transition-colors
+                    ${gameState.isScoreRevealed ? 'bg-slate-800 text-slate-300' : 'bg-red-600 hover:bg-red-500 text-white'}`}
+                >
+                  {gameState.isScoreRevealed ? <><EyeOff size={18}/> CLOSE</> : <><Eye size={18}/> 結果オープン</>}
+                </button>
+              ) : (
+                <div className="flex-1 bg-slate-800 rounded-lg flex items-center justify-center text-xs text-slate-500">
+                  予想フェーズ中
+                </div>
+              )}
+
+              <button 
+                onClick={() => {
+                  if (gameState.currentComedianIndex < 9) {
+                    updateGameState({
+                      currentComedianIndex: gameState.currentComedianIndex + 1,
+                      isScoreRevealed: false,
+                      phase: 'SCORING'
+                    });
+                  } else {
+                    updateGameState({phase: 'FINISHED'});
+                  }
+                }}
+                className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"
+              ><ChevronRight/></button>
             </div>
 
-            {/* 敗者復活名編集 */}
+            {/* 敗者復活編集 */}
             {gameState.comedians[gameState.currentComedianIndex].id === 10 && (
-               <div style={{marginTop: "1rem", display: "flex", gap: "0.5rem"}}>
-                 <input type="text" placeholder="敗者復活の名前" value={editingComedianName} onChange={e=>setEditingComedianName(e.target.value)} style={{flex: 1, padding: "0.5rem", borderRadius: "4px", border: "none", background: "#334155", color: "white"}}/>
-                 <button onClick={() => {
-                   const newComedians = [...gameState.comedians];
-                   newComedians[gameState.currentComedianIndex].name = editingComedianName;
-                   adminUpdate({comedians: newComedians});
-                   setEditingComedianName("");
-                 }} style={{background: "#2563eb", color: "white", border: "none", padding: "0.5rem", borderRadius: "4px", fontSize: "0.8rem", cursor: "pointer"}}>更新</button>
-               </div>
+              <div className="flex gap-2 pt-2 border-t border-slate-800">
+                <input 
+                  type="text" 
+                  className="flex-1 bg-slate-800 text-white text-sm px-3 py-2 rounded"
+                  placeholder="敗者復活組の名前を入力"
+                  value={editingName}
+                  onChange={e => setEditingName(e.target.value)}
+                />
+                <button 
+                  onClick={() => {
+                    const newComedians = [...gameState.comedians];
+                    newComedians[gameState.currentComedianIndex].name = editingName;
+                    updateGameState({comedians: newComedians});
+                    setEditingName("");
+                  }}
+                  className="bg-blue-600 text-white text-xs px-3 rounded font-bold"
+                >更新</button>
+              </div>
             )}
+
+            <button onClick={resetDatabase} className="w-full mt-2 text-xs text-slate-600 hover:text-red-500 py-1">
+              データリセット（管理者のみ）
+            </button>
           </div>
         </div>
       )}
-      
-      {/* フッター：バージョン情報（スタイル修正：最前面・白文字） */}
-      <footer style={{
-        position: "fixed", 
-        bottom: "10px", 
-        left: "10px",     // 左下に変更（右下は被りやすいため）
-        fontSize: "0.7rem", 
-        color: "white",   // 白文字ではっきり表示
-        background: "rgba(0,0,0,0.7)", // 背景をつけて読みやすく
-        padding: "4px 8px",
-        borderRadius: "4px",
-        zIndex: 9999,     // 最前面に
-        pointerEvents: "none" // 操作の邪魔にならないように
-      }}>
-         {APP_VERSION}
-      </footer>
     </div>
   );
 }
