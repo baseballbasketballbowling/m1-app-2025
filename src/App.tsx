@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, update, set } from "firebase/database";
-import { Trophy, Mic, Crown, Save, BarChart3, Settings, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, PlayCircle, CheckCircle2, UserCheck } from 'lucide-react';
+import { Trophy, Mic, Crown, Save, BarChart3, Settings, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, PlayCircle, CheckCircle2, UserCheck, LogOut } from 'lucide-react';
 
 // ------------------------------------------------------------------
 // 【重要】ここをあなたのFirebase設定に書き換えてください
@@ -55,6 +55,18 @@ export default function App() {
   const [editingComedianName, setEditingComedianName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false); // 自分の予想送信済みフラグ
 
+  // ローカルストレージからログイン情報を復元（リロード対策）
+  useEffect(() => {
+    const savedUser = localStorage.getItem('m1_user_v2');
+    if (savedUser) {
+      try {
+        setUser(JSON.parse(savedUser));
+      } catch (e) {
+        console.error("Login restore failed", e);
+      }
+    }
+  }, []);
+
   // Firebase同期
   useEffect(() => {
     if (!db) return;
@@ -96,7 +108,18 @@ export default function App() {
   const handleLogin = (e) => {
     e.preventDefault();
     if (!loginName) return;
-    setUser({ name: loginName, isAdmin: isAdminLogin });
+    const userData = { name: loginName, isAdmin: isAdminLogin };
+    setUser(userData);
+    // ログイン情報をブラウザに保存
+    localStorage.setItem('m1_user_v2', JSON.stringify(userData));
+  };
+
+  const handleLogout = () => {
+    if(window.confirm("ログアウトしますか？")) {
+      localStorage.removeItem('m1_user_v2');
+      setUser(null);
+      setLoginName("");
+    }
   };
 
   // 予想を送信 (追加)
@@ -112,6 +135,7 @@ export default function App() {
       name: user.name
     });
     setIsPredictionSubmitted(true);
+    alert("予想を保存しました！");
   };
 
   const submitScore = () => {
@@ -187,7 +211,12 @@ export default function App() {
           <div style={{fontWeight: "bold", display: "flex", alignItems: "center", gap: "0.5rem"}}>
             <span style={{background: "#eab308", color: "black", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem"}}>M-1</span> SCORING
           </div>
-          <div style={{fontSize: "0.9rem", color: "#cbd5e1"}}>{user.name} {user.isAdmin && "★"}</div>
+          <div style={{fontSize: "0.9rem", color: "#cbd5e1", display: "flex", alignItems: "center", gap: "10px"}}>
+            <span>{user.name} {user.isAdmin && "★"}</span>
+            <button onClick={handleLogout} style={{background: "transparent", border: "none", color: "#64748b", cursor: "pointer", padding: "4px"}}>
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
       </header>
 
