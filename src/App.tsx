@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v2.9 (Score History & Persistent Reveal)";
+const APP_VERSION = "v2.10 (Sync Logic Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -61,7 +61,7 @@ export default function App() {
     isScoreRevealed: false,
     comedians: INITIAL_COMEDIANS,
     forceSyncTimestamp: 0, 
-    revealedStatus: {} as Record<string, boolean> // ★追加: どのコンビがオープン済みか記録
+    revealedStatus: {} as Record<string, boolean>
   });
   
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
@@ -102,14 +102,6 @@ export default function App() {
           comedians: val.comedians || prev.comedians || INITIAL_COMEDIANS,
           revealedStatus: val.revealedStatus || {}
         }));
-
-        // 強制同期ロジック
-        if (val.forceSyncTimestamp && val.forceSyncTimestamp > lastSyncTimestamp.current) {
-          setViewMode(null);
-          setIsMenuOpen(false);
-          lastSyncTimestamp.current = val.forceSyncTimestamp;
-        }
-
       } else {
         set(gameRef, {
             phase: 'PREDICTION',
@@ -126,6 +118,17 @@ export default function App() {
 
     return () => { unsubGame(); unsubScores(); unsubPreds(); };
   }, []);
+
+  // ★修正: 強制同期監視のための独立したEffect
+  // gameState.forceSyncTimestamp が更新されたら確実に実行する
+  useEffect(() => {
+    if (gameState.forceSyncTimestamp && gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
+      console.log("Force sync executing...", gameState.forceSyncTimestamp);
+      setViewMode(null); // 閲覧モードを解除してメイン画面に戻す
+      setIsMenuOpen(false);
+      lastSyncTimestamp.current = gameState.forceSyncTimestamp; // 処理済みとしてマーク
+    }
+  }, [gameState.forceSyncTimestamp]);
 
   // 2. 自分の予想データの反映
   useEffect(() => {
@@ -218,13 +221,12 @@ export default function App() {
     const nextComedian = safeComedians[newIndex];
     if (!nextComedian) return;
 
-    // 次のコンビが過去にオープン済みかチェック
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
 
     updateGameState({
       currentComedianIndex: newIndex,
-      isScoreRevealed: nextIsRevealed, // 履歴があればオープン状態で開始
-      phase: 'SCORING' // 切り替え時は強制的に採点フェーズへ
+      isScoreRevealed: nextIsRevealed, 
+      phase: 'SCORING' 
     });
   };
 
@@ -237,7 +239,6 @@ export default function App() {
       isScoreRevealed: newRevealState
     };
 
-    // オープンにする時は履歴にも記録する
     if (newRevealState) {
       updates[`revealedStatus/${currentId}`] = true;
     }
