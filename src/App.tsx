@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.0 (Final Vote Added)";
+const APP_VERSION = "v3.1 (Sync Button Moved)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -41,7 +41,7 @@ const INITIAL_COMEDIANS = [
 // Firebase初期化
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const DB_ROOT = 'm1_2025_v3'; // バージョンアップに伴いデータルート変更
+const DB_ROOT = 'm1_2025_v3'; 
 
 // ------------------------------------------------------------------
 // コンポーネント実装
@@ -131,7 +131,7 @@ export default function App() {
     return () => { unsubGame(); unsubScores(); unsubPreds(); unsubVotes(); };
   }, []);
 
-  // ★強制同期監視
+  // ★強制同期監視 (これ以外の自動遷移は削除済み)
   useEffect(() => {
     if (gameState.forceSyncTimestamp && gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
       setViewMode(null);
@@ -654,6 +654,7 @@ export default function App() {
         {/* --- SCORING & RESULT PHASE --- */}
         {(displayPhase === 'SCORING' || displayPhase === 'FINISHED') && (
           <div className="animate-fade-in space-y-6">
+            {/* Comedian Card */}
             <div className="relative overflow-hidden bg-gradient-to-br from-red-900 to-slate-900 rounded-2xl p-8 text-center border border-red-900 shadow-2xl">
               <div className="absolute top-0 right-0 p-4 opacity-10"><Mic size={120}/></div>
               <div className="relative z-10">
@@ -846,6 +847,13 @@ export default function App() {
             <div className="flex items-center justify-between">
               <div className="text-xs font-bold text-red-500 flex items-center gap-1"><Settings size={12}/> ADMIN</div>
               <div className="flex bg-slate-800 rounded p-1 gap-1 overflow-x-auto">
+                <button 
+                  onClick={triggerForceSync}
+                  className="px-3 py-1 rounded text-xs text-green-400 bg-slate-900 hover:bg-slate-700 flex items-center gap-1 border border-slate-700"
+                  title="全参加者の画面を現在の進行状況に強制的に戻します"
+                >
+                  <Radio size={12} className="animate-pulse"/> 全員同期
+                </button>
                 <button onClick={() => updateGameState({phase: 'PREDICTION'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>予想</button>
                 <button onClick={() => updateGameState({phase: 'PREDICTION_REVEAL'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION_REVEAL' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>発表</button>
                 <button onClick={() => updateGameState({phase: 'SCORING'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='SCORING' ? 'bg-red-600 text-white' : 'text-slate-400'}`}>採点</button>
@@ -882,10 +890,7 @@ export default function App() {
               </div>
             ) : (
               <div className="flex gap-2">
-                <button onClick={triggerForceSync} className="flex-1 px-3 py-3 rounded text-xs text-green-400 bg-slate-900 hover:bg-slate-700 flex items-center justify-center gap-1 border border-slate-700">
-                  <Radio size={12} className="animate-pulse"/> 全員同期
-                </button>
-                {gameState.comedians[gameState.currentComedianIndex]?.id === 10 && (
+                {gameState.comedians && gameState.comedians[gameState.currentComedianIndex]?.id === 10 && (
                   <div className="flex-1 flex gap-1">
                     <input type="text" className="w-full bg-slate-800 text-white text-xs px-2 rounded" placeholder="敗者復活組" value={editingName} onChange={e => setEditingName(e.target.value)}/>
                     <button onClick={() => {
