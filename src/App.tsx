@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.3 (Unique User & Vote Status)";
+const APP_VERSION = "v3.4 (Safety Fix & Manual Sync)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -196,7 +196,7 @@ export default function App() {
 
     const nameToCheck = loginName.trim();
 
-    // ★重複チェック (DB_ROOT/users/{name} があるか確認)
+    // ★重複チェック
     const dbRef = ref(db);
     try {
       const snapshot = await get(child(dbRef, `${DB_ROOT}/users/${nameToCheck}`));
@@ -256,7 +256,10 @@ export default function App() {
     if (!user || !localDisplay) return;
     setIsSubmitting(true);
     try {
-      const current = localDisplay.comedians[localDisplay.currentComedianIndex];
+      const displayData = localDisplay || gameState;
+      const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
+      const current = safeComedians[displayData.currentComedianIndex] || safeComedians[0];
+      
       await set(ref(db, `${DB_ROOT}/scores/${current.id}/${user.name}`), myScore);
       setIsScoreSubmitted(true);
     } catch (error: any) {
@@ -287,8 +290,10 @@ export default function App() {
   };
 
   const adminChangeComedian = (newIndex: number) => {
-    const nextComedian = gameState.comedians[newIndex];
+    const safeComedians = gameState.comedians || INITIAL_COMEDIANS;
+    const nextComedian = safeComedians[newIndex];
     if (!nextComedian) return;
+
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
 
     updateGameState({
@@ -344,35 +349,45 @@ export default function App() {
     alert("リセット完了");
   };
 
-  // --- Helpers ---
+  // --- Helpers (安全装置: 配列チェックとインデックスチェックを厳格化) ---
   const displayData = localDisplay || gameState;
-  const currentComedian = displayData.comedians[displayData.currentComedianIndex];
+  
+  // 配列であることを保証
+  const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
+  const safeFinalists = Array.isArray(displayData.finalists) ? displayData.finalists : [];
+
+  // インデックス範囲チェック
+  const safeIndex = (displayData.currentComedianIndex >= 0 && displayData.currentComedianIndex < safeComedians.length)
+    ? displayData.currentComedianIndex
+    : 0;
+
+  const currentComedian = safeComedians[safeIndex];
   
   const getComedianName = (id: string | number) => {
-    const c = displayData.comedians.find(c => String(c.id) === String(id));
+    const c = safeComedians.find(c => String(c.id) === String(id));
     return c ? c.name : "不明";
   };
 
   const ranking = useMemo(() => {
-    return displayData.comedians.map(c => {
+    return safeComedians.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       return { ...c, avg: parseFloat(avg) };
     }).sort((a, b) => b.avg - a.avg);
-  }, [scores, displayData.comedians]);
+  }, [scores, safeComedians]);
 
   const finalVoteResult = useMemo(() => {
     const result: Record<number, number> = {};
-    if (displayData.finalists) {
-      displayData.finalists.forEach(id => result[id] = 0);
-    }
+    safeFinalists.forEach(id => result[id] = 0);
     Object.values(finalVotes).forEach(voteId => {
       if (result[voteId] !== undefined) result[voteId]++;
     });
     return result;
-  }, [finalVotes, displayData.finalists]);
+  }, [finalVotes, safeFinalists]);
 
+  // ★最終的な表示モードの決定
+  // viewModeがあればそれを、なければ同期されたlocalDisplayのフェーズを表示
   const activePhase = viewMode || displayData.phase;
 
 
@@ -533,7 +548,7 @@ export default function App() {
             {displayData.phase === 'PREDICTION_REVEAL' && "👀 予想発表！"}
             {displayData.phase === 'SCORING' && `🎤 No.${displayData.currentComedianIndex + 1} ${currentComedian?.name} 採点中`}
             {displayData.phase === 'FINAL_VOTE' && (
-               (displayData.finalists && displayData.finalists.length === 3)
+               (safeFinalists.length === 3)
                ? "🔥 最終決戦 投票受付中"
                : "⏳ 最終決戦 投票準備中"
             )}
@@ -564,7 +579,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {safeComediansList.map((c, i) => {
+                    {safeComedians.map((c, i) => {
                       const isRevealed = displayData.revealedStatus?.[c.id];
                       const myScoreVal = scores[c.id]?.[user.name];
                       const rankData = ranking.find(r => r.id === c.id);
@@ -620,7 +635,7 @@ export default function App() {
                       }}
                     >
                       <option value="">選択...</option>
-                      {safeComediansList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      {safeComedians.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                   </div>
                 ))}
@@ -806,14 +821,14 @@ export default function App() {
 
             {/* 決戦3組の表示 & 投票 */}
             <div className="grid gap-4">
-              {(!displayData.finalists || displayData.finalists.length === 0) && (
+              {(!safeFinalists || safeFinalists.length === 0) && (
                 <div className="text-center text-slate-500 py-10 bg-slate-900 rounded-xl border border-slate-800">
                   まだ決戦進出者が決定していません
                 </div>
               )}
               
-              {displayData.finalists?.map((id) => {
-                const comedian = safeComediansList.find(c => c.id === id);
+              {safeFinalists.map((id) => {
+                const comedian = safeComedians.find(c => c.id === id);
                 if (!comedian) return null;
                 const isSelected = selectedVoteId === id;
                 const voteCount = finalVoteResult[id] || 0;
@@ -822,7 +837,7 @@ export default function App() {
                   <div 
                     key={id}
                     onClick={() => {
-                      if (!isVoteSubmitted && !displayData.isScoreRevealed) {
+                      if (!isVoteSubmitted && !displayData.isScoreRevealed && safeFinalists.length === 3) {
                         setSelectedVoteId(id);
                       }
                     }}
@@ -859,7 +874,7 @@ export default function App() {
               })}
             </div>
 
-            {!displayData.isScoreRevealed && displayData.finalists?.length > 0 && (
+            {!displayData.isScoreRevealed && safeFinalists.length === 3 && (
               <button 
                 onClick={sendFinalVote}
                 disabled={isSubmitting || isVoteSubmitted || !selectedVoteId}
@@ -955,7 +970,7 @@ export default function App() {
           <div className="bg-slate-900 w-full max-w-sm rounded-xl border border-slate-700 p-6 space-y-4">
             <h3 className="text-xl font-bold text-white text-center">決戦の3組を選択</h3>
             <div className="space-y-2 max-h-60 overflow-y-auto">
-              {safeComediansList.map(c => {
+              {safeComedians.map(c => {
                 const isSelected = tempFinalists.includes(c.id);
                 return (
                   <div 
