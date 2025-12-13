@@ -4,7 +4,12 @@ import { getDatabase, ref, onValue, update, set } from "firebase/database";
 import { Trophy, Mic, Crown, Save, BarChart3, Settings, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, PlayCircle, CheckCircle2, UserCheck, LogOut } from 'lucide-react';
 
 // ------------------------------------------------------------------
-// 【重要】ここをあなたのFirebase設定に書き換えてください
+// 現在のアプリバージョン (更新したらここを変える)
+// ------------------------------------------------------------------
+const APP_VERSION = "v1.2.1 (表示修正版)";
+
+// ------------------------------------------------------------------
+// あなたのFirebase設定
 // ------------------------------------------------------------------
 const firebaseConfig = {
   apiKey: "AIzaSyCvMn1srEPkKRujzDZDfpmRFJmLxwX65NE",
@@ -12,7 +17,8 @@ const firebaseConfig = {
   projectId: "m1-app-1e177",
   storageBucket: "m1-app-1e177.firebasestorage.app",
   messagingSenderId: "765518236984",
-  appId: "1:765518236984:web:ee6fffae3d38729a1605cd"
+  appId: "1:765518236984:web:ee6fffae3d38729a1605cd",
+  databaseURL: "https://m1-app-1e177-default-rtdb.firebaseio.com"
 };
 
 // Firebase初期化チェック
@@ -82,7 +88,7 @@ export default function App() {
       setScores(snap.val() || {});
     });
 
-    // 予想データ (追加)
+    // 予想データ
     const unsubPredictions = onValue(ref(db, `${DB_ROOT}/predictions`), (snap) => {
       const data = snap.val() || {};
       setAllPredictions(data);
@@ -108,9 +114,14 @@ export default function App() {
   const handleLogin = (e) => {
     e.preventDefault();
     if (!loginName) return;
+    // ユーザー名に禁止文字が含まれていないかチェック
+    if (loginName.includes('.') || loginName.includes('#') || loginName.includes('$') || loginName.includes('[') || loginName.includes(']')) {
+      alert("ニックネームに記号（. # $ [ ]）は使用できません");
+      return;
+    }
+
     const userData = { name: loginName, isAdmin: isAdminLogin };
     setUser(userData);
-    // ログイン情報をブラウザに保存
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
   };
 
@@ -122,27 +133,35 @@ export default function App() {
     }
   };
 
-  // 予想を送信 (追加)
+  // 予想を送信 (ロジック修正: setを使用し、完了を待機)
   const submitPrediction = () => {
     if (!db || !user) return;
     if (!myPrediction.first || !myPrediction.second || !myPrediction.third) {
       alert("1位〜3位まですべて選択してください");
       return;
     }
-    // predictions/ユーザー名 に保存
-    update(ref(db, `${DB_ROOT}/predictions/${user.name}`), {
+
+    // setを使ってデータを「置く」形に変更。then/catchで成功確認を行う
+    set(ref(db, `${DB_ROOT}/predictions/${user.name}`), {
       ...myPrediction,
       name: user.name
+    })
+    .then(() => {
+      setIsPredictionSubmitted(true);
+      alert("予想を保存しました！");
+    })
+    .catch((error) => {
+      console.error("Prediction save error:", error);
+      alert("保存に失敗しました。もう一度お試しください。\n" + error.message);
     });
-    setIsPredictionSubmitted(true);
-    alert("予想を保存しました！");
   };
 
   const submitScore = () => {
     if (!db || !user) return;
     const comedianId = gameState.comedians[gameState.currentComedianIndex].id;
-    update(ref(db, `${DB_ROOT}/scores/${comedianId}`), { [user.name]: myCurrentScore });
-    setIsScoreSubmitted(true);
+    set(ref(db, `${DB_ROOT}/scores/${comedianId}/${user.name}`), myCurrentScore)
+      .then(() => setIsScoreSubmitted(true))
+      .catch((err) => alert("採点の送信に失敗しました: " + err.message));
   };
 
   const adminUpdate = (updates) => {
@@ -152,7 +171,7 @@ export default function App() {
 
   const adminInit = () => {
     if (!db) return;
-    if(!window.confirm("本当にデータを全て初期化しますか？")) return;
+    if(!window.confirm("【注意】本当にデータを全て初期化しますか？\n全員の予想と採点データが消えます。")) return;
     
     set(ref(db, `${DB_ROOT}/gameState`), {
       phase: 'PREDICTION',
@@ -161,8 +180,8 @@ export default function App() {
       comedians: INITIAL_COMEDIANS
     });
     set(ref(db, `${DB_ROOT}/scores`), {});
-    set(ref(db, `${DB_ROOT}/predictions`), {}); // 予想もクリア
-    alert("リセットしました");
+    set(ref(db, `${DB_ROOT}/predictions`), {});
+    alert("データベースをリセットしました");
   };
 
   const currentRanking = useMemo(() => {
@@ -199,6 +218,9 @@ export default function App() {
           </label>
           <button type="submit" style={{padding: "1rem", borderRadius: "8px", background: "#dc2626", color: "white", fontWeight: "bold", border: "none", cursor: "pointer"}}>エントリー</button>
         </form>
+        <div style={{marginTop: "2rem", color: "#cbd5e1", fontSize: "0.8rem", fontFamily: "monospace", background: "rgba(255,255,255,0.1)", display: "inline-block", padding: "4px 8px", borderRadius: "4px"}}>
+           App Version: {APP_VERSION}
+        </div>
       </div>
     );
   }
@@ -415,6 +437,22 @@ export default function App() {
           </div>
         </div>
       )}
+      
+      {/* フッター：バージョン情報（スタイル修正：最前面・白文字） */}
+      <footer style={{
+        position: "fixed", 
+        bottom: "10px", 
+        left: "10px",     // 左下に変更（右下は被りやすいため）
+        fontSize: "0.7rem", 
+        color: "white",   // 白文字ではっきり表示
+        background: "rgba(0,0,0,0.7)", // 背景をつけて読みやすく
+        padding: "4px 8px",
+        borderRadius: "4px",
+        zIndex: 9999,     // 最前面に
+        pointerEvents: "none" // 操作の邪魔にならないように
+      }}>
+         {APP_VERSION}
+      </footer>
     </div>
   );
 }
