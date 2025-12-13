@@ -4,13 +4,16 @@ import { getDatabase, ref, onValue, set, update, push, child } from "firebase/da
 import { 
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
-  CheckCircle2, UserCheck, LogOut, Loader2, Users 
+  CheckCircle2, UserCheck, LogOut, Loader2, Users, List
 } from 'lucide-react';
+
+// エラー回避のため直接のCSSインポートを削除
+// import './index.css';
 
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v2.0 (Stable)";
+const APP_VERSION = "v2.3 (Reveal Added)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -20,7 +23,7 @@ const firebaseConfig = {
   storageBucket: "m1-app-1e177.firebasestorage.app",
   messagingSenderId: "765518236984",
   appId: "1:765518236984:web:ee6fffae3d38729a1605cd",
-  databaseURL: "https://m1-app-1e177-default-rtdb.firebaseio.com/"
+  databaseURL: "https://m1-app-1e177-default-rtdb.firebaseio.com"
 };
 
 // コンビ名リスト（2025年版想定）
@@ -40,7 +43,7 @@ const INITIAL_COMEDIANS = [
 // Firebase初期化
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const DB_ROOT = 'm1_2025_v2'; // バージョンを変えてデータをクリーンにする
+const DB_ROOT = 'm1_2025_v2'; 
 
 // ------------------------------------------------------------------
 // コンポーネント実装
@@ -54,7 +57,7 @@ export default function App() {
 
   // --- Game Data State ---
   const [gameState, setGameState] = useState({
-    phase: 'PREDICTION', // PREDICTION | SCORING | FINISHED
+    phase: 'PREDICTION', // PREDICTION | PREDICTION_REVEAL | SCORING | FINISHED
     currentComedianIndex: 0,
     isScoreRevealed: false,
     comedians: INITIAL_COMEDIANS,
@@ -85,7 +88,20 @@ export default function App() {
 
     const unsubGame = onValue(gameRef, (snap) => {
       const val = snap.val();
-      if (val) setGameState(val);
+      if (val) {
+        setGameState(prev => ({
+          ...prev, 
+          ...val,
+          comedians: val.comedians || prev.comedians || INITIAL_COMEDIANS
+        }));
+      } else {
+        set(gameRef, {
+            phase: 'PREDICTION',
+            currentComedianIndex: 0,
+            isScoreRevealed: false,
+            comedians: INITIAL_COMEDIANS
+        });
+      }
     });
     const unsubScores = onValue(scoresRef, (snap) => setScores(snap.val() || {}));
     const unsubPreds = onValue(predsRef, (snap) => setPredictions(snap.val() || {}));
@@ -112,7 +128,6 @@ export default function App() {
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginName.trim()) return;
-    // 禁止文字チェック
     if (/[.#$[\]]/.test(loginName)) {
       alert("名前に . # $ [ ] は使えません");
       return;
@@ -130,7 +145,6 @@ export default function App() {
     }
   };
 
-  // 予想を保存
   const savePrediction = async () => {
     if (!user) return;
     if (!myPrediction.first || !myPrediction.second || !myPrediction.third) {
@@ -151,13 +165,13 @@ export default function App() {
     }
   };
 
-  // 採点を送信
   const sendScore = async () => {
     if (!user) return;
     setIsSubmitting(true);
     try {
-      const comedianId = gameState.comedians[gameState.currentComedianIndex].id;
-      await set(ref(db, `${DB_ROOT}/scores/${comedianId}/${user.name}`), myScore);
+      const safeComedians = gameState.comedians || INITIAL_COMEDIANS;
+      const current = safeComedians[gameState.currentComedianIndex] || safeComedians[0];
+      await set(ref(db, `${DB_ROOT}/scores/${current.id}/${user.name}`), myScore);
       setIsScoreSubmitted(true);
     } catch (error: any) {
       alert("送信失敗: " + error.message);
@@ -187,17 +201,22 @@ export default function App() {
   };
 
   // --- Helpers ---
-  const currentComedian = gameState.comedians[gameState.currentComedianIndex];
+  const safeComediansList = gameState.comedians || INITIAL_COMEDIANS;
+  const currentComedian = safeComediansList[gameState.currentComedianIndex] || safeComediansList[0];
   
-  // ランキング計算
+  const getComedianName = (id: string) => {
+    const c = safeComediansList.find(c => String(c.id) === String(id));
+    return c ? c.name : "不明";
+  };
+
   const ranking = useMemo(() => {
-    return gameState.comedians.map(c => {
+    return safeComediansList.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       return { ...c, avg: parseFloat(avg) };
     }).sort((a, b) => b.avg - a.avg);
-  }, [scores, gameState.comedians]);
+  }, [scores, safeComediansList]);
 
 
   // =================================================================
@@ -241,7 +260,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-32 font-sans">
       
-      {/* Header */}
       <header className="sticky top-0 z-20 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex justify-between items-center shadow-md">
         <div className="flex items-center gap-2 font-bold">
           <span className="bg-yellow-500 text-black px-1.5 py-0.5 rounded text-xs">M-1</span>
@@ -255,10 +273,10 @@ export default function App() {
         </div>
       </header>
 
-      {/* Phase Banner */}
       <div className={`text-center py-2 text-sm font-bold text-white shadow-lg transition-colors duration-300
-        ${gameState.phase === 'PREDICTION' ? 'bg-blue-600' : gameState.phase === 'SCORING' ? 'bg-red-700' : 'bg-green-600'}`}>
+        ${gameState.phase === 'PREDICTION' ? 'bg-blue-600' : gameState.phase === 'PREDICTION_REVEAL' ? 'bg-purple-600' : gameState.phase === 'SCORING' ? 'bg-red-700' : 'bg-green-600'}`}>
         {gameState.phase === 'PREDICTION' && "🏆 3連単予想 受付中"}
+        {gameState.phase === 'PREDICTION_REVEAL' && "👀 予想発表！"}
         {gameState.phase === 'SCORING' && `🎤 No.${gameState.currentComedianIndex + 1} ${currentComedian?.name} 採点中`}
         {gameState.phase === 'FINISHED' && "✨ 全日程終了 ✨"}
       </div>
@@ -282,7 +300,7 @@ export default function App() {
                       onChange={(e) => setMyPrediction({...myPrediction, [i===0?'first':i===1?'second':'third']: e.target.value})}
                     >
                       <option value="">選択...</option>
-                      {gameState.comedians.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      {safeComediansList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                   </div>
                 ))}
@@ -297,7 +315,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Participants List */}
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
               <h3 className="text-sm font-bold text-slate-400 mb-4 flex items-center gap-2">
                 <Users size={16}/> 提出済みのメンバー
@@ -314,10 +331,50 @@ export default function App() {
           </div>
         )}
 
+        {/* --- PREDICTION REVEAL PHASE (新規追加) --- */}
+        {gameState.phase === 'PREDICTION_REVEAL' && (
+          <div className="animate-fade-in space-y-6">
+            <div className="text-center mb-6">
+              <h2 className="text-2xl font-black text-white mb-2 tracking-tighter text-yellow-500">みんなの予想</h2>
+              <p className="text-slate-400 text-sm">誰が優勝を当てられるか？</p>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              {Object.entries(predictions).map(([name, pred]: [string, any]) => (
+                <div key={name} className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-2 opacity-10"><Crown size={60}/></div>
+                  <div className="font-bold text-lg text-white mb-3 border-b border-slate-800 pb-2 flex items-center gap-2">
+                    <span className="w-2 h-6 bg-blue-600 rounded-full"></span>
+                    {name}
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="w-8 text-yellow-500 font-bold">1位</span>
+                      <span className="font-bold text-white text-lg">{getComedianName(pred.first)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-8 text-slate-400 font-bold">2位</span>
+                      <span className="text-slate-200">{getComedianName(pred.second)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-8 text-amber-700 font-bold">3位</span>
+                      <span className="text-slate-200">{getComedianName(pred.third)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {Object.keys(predictions).length === 0 && (
+                <div className="col-span-2 text-center py-10 text-slate-500 bg-slate-900 rounded-xl">
+                  誰も予想を提出していません
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* --- SCORING & RESULT PHASE --- */}
         {(gameState.phase === 'SCORING' || gameState.phase === 'FINISHED') && (
           <div className="animate-fade-in space-y-6">
-            
             {/* Comedian Card */}
             <div className="relative overflow-hidden bg-gradient-to-br from-red-900 to-slate-900 rounded-2xl p-8 text-center border border-red-900 shadow-2xl">
               <div className="absolute top-0 right-0 p-4 opacity-10"><Mic size={120}/></div>
@@ -381,7 +438,6 @@ export default function App() {
             {/* Result Area */}
             {gameState.isScoreRevealed && (
               <div className="space-y-4">
-                {/* Score Grid */}
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300">
                     <BarChart3 size={16}/> 審査員別スコア
@@ -396,7 +452,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Ranking Table */}
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300">
                     <Trophy size={16}/> 現在の順位
@@ -428,11 +483,15 @@ export default function App() {
           <div className="max-w-2xl mx-auto space-y-3">
             <div className="flex items-center justify-between">
               <div className="text-xs font-bold text-red-500 flex items-center gap-1"><Settings size={12}/> ADMIN</div>
-              <div className="flex bg-slate-800 rounded p-1">
+              <div className="flex bg-slate-800 rounded p-1 gap-1">
                 <button 
                   onClick={() => updateGameState({phase: 'PREDICTION'})}
                   className={`px-3 py-1 rounded text-xs ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
                 >予想</button>
+                <button 
+                  onClick={() => updateGameState({phase: 'PREDICTION_REVEAL'})}
+                  className={`px-3 py-1 rounded text-xs ${gameState.phase==='PREDICTION_REVEAL' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}
+                >発表</button>
                 <button 
                   onClick={() => updateGameState({phase: 'SCORING'})}
                   className={`px-3 py-1 rounded text-xs ${gameState.phase==='SCORING' ? 'bg-red-600 text-white' : 'text-slate-400'}`}
@@ -442,10 +501,14 @@ export default function App() {
 
             <div className="flex items-center gap-2">
               <button 
-                onClick={() => updateGameState({
-                  currentComedianIndex: Math.max(0, gameState.currentComedianIndex - 1),
-                  isScoreRevealed: false
-                })}
+                onClick={() => {
+                  if (gameState.phase === 'SCORING') {
+                    updateGameState({
+                      currentComedianIndex: Math.max(0, gameState.currentComedianIndex - 1),
+                      isScoreRevealed: false
+                    })
+                  }
+                }}
                 className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"
               ><ChevronLeft/></button>
 
@@ -459,13 +522,17 @@ export default function App() {
                 </button>
               ) : (
                 <div className="flex-1 bg-slate-800 rounded-lg flex items-center justify-center text-xs text-slate-500">
-                  予想フェーズ中
+                  {gameState.phase === 'PREDICTION' ? '予想受付中' : '予想発表中'}
                 </div>
               )}
 
               <button 
                 onClick={() => {
-                  if (gameState.currentComedianIndex < 9) {
+                  if (gameState.phase === 'PREDICTION') {
+                    updateGameState({phase: 'PREDICTION_REVEAL'});
+                  } else if (gameState.phase === 'PREDICTION_REVEAL') {
+                    updateGameState({phase: 'SCORING', currentComedianIndex: 0, isScoreRevealed: false});
+                  } else if (gameState.currentComedianIndex < 9) {
                     updateGameState({
                       currentComedianIndex: gameState.currentComedianIndex + 1,
                       isScoreRevealed: false,
@@ -479,8 +546,7 @@ export default function App() {
               ><ChevronRight/></button>
             </div>
 
-            {/* 敗者復活編集 */}
-            {gameState.comedians[gameState.currentComedianIndex].id === 10 && (
+            {gameState.comedians && gameState.comedians[gameState.currentComedianIndex]?.id === 10 && (
               <div className="flex gap-2 pt-2 border-t border-slate-800">
                 <input 
                   type="text" 
@@ -491,7 +557,7 @@ export default function App() {
                 />
                 <button 
                   onClick={() => {
-                    const newComedians = [...gameState.comedians];
+                    const newComedians = [...(gameState.comedians || INITIAL_COMEDIANS)];
                     newComedians[gameState.currentComedianIndex].name = editingName;
                     updateGameState({comedians: newComedians});
                     setEditingName("");
