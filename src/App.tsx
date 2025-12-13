@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, update } from "firebase/database";
+import { getDatabase, ref, onValue, set, update, get, child } from "firebase/database";
 import { 
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.2 (Strict Manual Sync)";
+const APP_VERSION = "v3.3 (Unique User & Vote Status)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -54,7 +54,7 @@ export default function App() {
   const [isAdminLogin, setIsAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
 
-  // --- Game Data State (Firebase Master Data) ---
+  // --- Game Data State ---
   const [gameState, setGameState] = useState({
     phase: 'PREDICTION', 
     currentComedianIndex: 0,
@@ -65,8 +65,7 @@ export default function App() {
     revealedStatus: {} as Record<string, boolean>
   });
 
-  // --- Local Display State (実際に画面に表示するデータ) ---
-  // 自動遷移を防ぐため、Firebaseデータとは分離して管理
+  // --- Local Display State ---
   const [localDisplay, setLocalDisplay] = useState<typeof gameState | null>(null);
   
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
@@ -102,7 +101,7 @@ export default function App() {
     }
   }, []);
 
-  // 2. Firebase同期 (gameStateの受信のみ行い、自動でlocalDisplayには反映しない)
+  // 2. Firebase同期
   useEffect(() => {
     const gameRef = ref(db, `${DB_ROOT}/gameState`);
     const scoresRef = ref(db, `${DB_ROOT}/scores`);
@@ -123,7 +122,7 @@ export default function App() {
         };
         setGameState(newGameState);
 
-        // ★初回ロード時のみ、強制的に同期して表示する
+        // 初回ロード時のみ強制同期
         setLocalDisplay(prev => {
           if (prev === null) {
             lastSyncTimestamp.current = newGameState.forceSyncTimestamp;
@@ -133,7 +132,6 @@ export default function App() {
         });
 
       } else {
-        // データがない場合は初期化
         set(gameRef, {
             phase: 'PREDICTION',
             currentComedianIndex: 0,
@@ -152,20 +150,18 @@ export default function App() {
     return () => { unsubGame(); unsubScores(); unsubPreds(); unsubVotes(); };
   }, []);
 
-  // ★3. 強制同期監視 & 手動同期ロジック
+  // ★3. 強制同期監視
   useEffect(() => {
-    // タイムスタンプが更新され、かつ手元の記録より新しい場合のみ同期実行
     if (gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
       console.log("Manual Sync Triggered");
-      setLocalDisplay(gameState); // 最新の状態を表示に反映
-      setViewMode(null);          // 閲覧モード解除
+      setLocalDisplay(gameState); 
+      setViewMode(null);
       setIsMenuOpen(false);
       lastSyncTimestamp.current = gameState.forceSyncTimestamp;
     }
-  }, [gameState.forceSyncTimestamp, gameState]); // gameStateも依存に含める
+  }, [gameState.forceSyncTimestamp, gameState]); 
 
-  // 4. データ反映系 (localDisplayベースで動作)
-  // localDisplayが更新されたら、それに基づいて自分の入力状態などをリセット
+  // 4. データ反映系
   useEffect(() => {
     if (!localDisplay) return;
     setMyScore(85);
@@ -186,7 +182,7 @@ export default function App() {
 
   // --- Actions ---
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginName.trim()) return;
     if (/[.#$[\]]/.test(loginName)) {
@@ -197,7 +193,29 @@ export default function App() {
       alert("管理者パスワードが違います");
       return;
     }
-    const userData = { name: loginName.trim(), isAdmin: isAdminLogin };
+
+    const nameToCheck = loginName.trim();
+
+    // ★重複チェック (DB_ROOT/users/{name} があるか確認)
+    const dbRef = ref(db);
+    try {
+      const snapshot = await get(child(dbRef, `${DB_ROOT}/users/${nameToCheck}`));
+      if (snapshot.exists()) {
+        alert("その名前は既に使用されています。別の名前を入力してください。");
+        return;
+      }
+    } catch (error) {
+      console.error("Login check error:", error);
+    }
+
+    const userData = { name: nameToCheck, isAdmin: isAdminLogin };
+    
+    // ★ユーザー登録
+    set(ref(db, `${DB_ROOT}/users/${nameToCheck}`), {
+      joinedAt: Date.now(),
+      isAdmin: isAdminLogin
+    });
+
     setUser(userData);
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
   };
@@ -263,7 +281,7 @@ export default function App() {
     }
   };
 
-  // --- Admin Actions (これらはgameStateを更新する) ---
+  // --- Admin Actions ---
   const updateGameState = (updates: any) => {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
@@ -320,13 +338,13 @@ export default function App() {
       },
       scores: {},
       predictions: {},
-      finalVotes: {}
+      finalVotes: {},
+      users: {} // ユーザーリストもリセット
     });
     alert("リセット完了");
   };
 
   // --- Helpers ---
-  // ★表示には localDisplay を使用する (データ未着時はgameStateでフォールバック)
   const displayData = localDisplay || gameState;
   const currentComedian = displayData.comedians[displayData.currentComedianIndex];
   
@@ -355,8 +373,6 @@ export default function App() {
     return result;
   }, [finalVotes, displayData.finalists]);
 
-  // ★最終的な表示モードの決定
-  // viewModeがあればそれを、なければ同期されたlocalDisplayのフェーズを表示
   const activePhase = viewMode || displayData.phase;
 
 
@@ -516,7 +532,11 @@ export default function App() {
             {displayData.phase === 'PREDICTION' && "🏆 3連単予想 受付中"}
             {displayData.phase === 'PREDICTION_REVEAL' && "👀 予想発表！"}
             {displayData.phase === 'SCORING' && `🎤 No.${displayData.currentComedianIndex + 1} ${currentComedian?.name} 採点中`}
-            {displayData.phase === 'FINAL_VOTE' && "🔥 最終決戦 投票受付中"}
+            {displayData.phase === 'FINAL_VOTE' && (
+               (displayData.finalists && displayData.finalists.length === 3)
+               ? "🔥 最終決戦 投票受付中"
+               : "⏳ 最終決戦 投票準備中"
+            )}
             {displayData.phase === 'FINISHED' && "✨ 全日程終了 ✨"}
           </>
         )}
