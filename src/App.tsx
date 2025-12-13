@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.4 (Safety Fix & Manual Sync)";
+const APP_VERSION = "v3.5 (Admin Live View Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -65,7 +65,7 @@ export default function App() {
     revealedStatus: {} as Record<string, boolean>
   });
 
-  // --- Local Display State ---
+  // --- Local Display State (参加者用フリーズデータ) ---
   const [localDisplay, setLocalDisplay] = useState<typeof gameState | null>(null);
   
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
@@ -101,7 +101,7 @@ export default function App() {
     }
   }, []);
 
-  // 2. Firebase同期
+  // 2. Firebase同期 (gameStateの受信)
   useEffect(() => {
     const gameRef = ref(db, `${DB_ROOT}/gameState`);
     const scoresRef = ref(db, `${DB_ROOT}/scores`);
@@ -122,7 +122,7 @@ export default function App() {
         };
         setGameState(newGameState);
 
-        // 初回ロード時のみ強制同期
+        // 初回ロード時のみ localDisplay を設定（参加者フリーズの初期値）
         setLocalDisplay(prev => {
           if (prev === null) {
             lastSyncTimestamp.current = newGameState.forceSyncTimestamp;
@@ -150,10 +150,11 @@ export default function App() {
     return () => { unsubGame(); unsubScores(); unsubPreds(); unsubVotes(); };
   }, []);
 
-  // ★3. 強制同期監視
+  // ★3. 強制同期監視 (localDisplay の更新)
   useEffect(() => {
     if (gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
       console.log("Manual Sync Triggered");
+      // localDisplayをgameStateの最新情報に更新
       setLocalDisplay(gameState); 
       setViewMode(null);
       setIsMenuOpen(false);
@@ -161,7 +162,7 @@ export default function App() {
     }
   }, [gameState.forceSyncTimestamp, gameState]); 
 
-  // 4. データ反映系
+  // 4. データ反映系 (localDisplayが更新されたら自分の入力状態などをリセット)
   useEffect(() => {
     if (!localDisplay) return;
     setMyScore(85);
@@ -196,7 +197,7 @@ export default function App() {
 
     const nameToCheck = loginName.trim();
 
-    // ★重複チェック
+    // 重複チェック
     const dbRef = ref(db);
     try {
       const snapshot = await get(child(dbRef, `${DB_ROOT}/users/${nameToCheck}`));
@@ -210,7 +211,7 @@ export default function App() {
 
     const userData = { name: nameToCheck, isAdmin: isAdminLogin };
     
-    // ★ユーザー登録
+    // ユーザー登録
     set(ref(db, `${DB_ROOT}/users/${nameToCheck}`), {
       joinedAt: Date.now(),
       isAdmin: isAdminLogin
@@ -284,14 +285,13 @@ export default function App() {
     }
   };
 
-  // --- Admin Actions ---
+  // --- Admin Actions (これらはgameStateを更新する) ---
   const updateGameState = (updates: any) => {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
 
   const adminChangeComedian = (newIndex: number) => {
-    const safeComedians = gameState.comedians || INITIAL_COMEDIANS;
-    const nextComedian = safeComedians[newIndex];
+    const nextComedian = gameState.comedians[newIndex];
     if (!nextComedian) return;
 
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
@@ -344,19 +344,20 @@ export default function App() {
       scores: {},
       predictions: {},
       finalVotes: {},
-      users: {} // ユーザーリストもリセット
+      users: {} 
     });
     alert("リセット完了");
   };
 
-  // --- Helpers (安全装置: 配列チェックとインデックスチェックを厳格化) ---
-  const displayData = localDisplay || gameState;
+  // --- Helpers ---
+  // ★表示に使用するデータソースの決定: Adminは gameState (ライブ)、Participantは localDisplay (フリーズ)
+  const dataForRendering = user?.isAdmin ? gameState : (localDisplay || gameState);
+  const displayData = dataForRendering; 
   
-  // 配列であることを保証
+  // 安全装置: 配列チェックとインデックスチェックを厳格化
   const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
   const safeFinalists = Array.isArray(displayData.finalists) ? displayData.finalists : [];
 
-  // インデックス範囲チェック
   const safeIndex = (displayData.currentComedianIndex >= 0 && displayData.currentComedianIndex < safeComedians.length)
     ? displayData.currentComedianIndex
     : 0;
@@ -387,7 +388,6 @@ export default function App() {
   }, [finalVotes, safeFinalists]);
 
   // ★最終的な表示モードの決定
-  // viewModeがあればそれを、なければ同期されたlocalDisplayのフェーズを表示
   const activePhase = viewMode || displayData.phase;
 
 
@@ -799,7 +799,7 @@ export default function App() {
                           </span>
                           <span className="font-bold text-sm">{c.name}</span>
                         </div>
-                        <span className="font-bold text-yellow-500">{c.avg}</span>
+                        <span className="font-bold text-yellow-500">{ranking.find(r => r.id === c.id)?.avg}</span>
                       </div>
                     ))}
                   </div>
@@ -845,7 +845,7 @@ export default function App() {
                       ${isSelected 
                         ? 'bg-red-900/40 border-red-500 shadow-[0_0_30px_rgba(239,68,68,0.3)]' 
                         : 'bg-slate-900 border-slate-700 hover:border-slate-500'}
-                      ${isVoteSubmitted || displayData.isScoreRevealed ? 'cursor-default' : ''}
+                      ${isVoteSubmitted || displayData.isScoreRevealed || safeFinalists.length !== 3 ? 'cursor-default' : ''}
                     `}
                   >
                     <div className="flex justify-between items-center relative z-10">
@@ -887,6 +887,13 @@ export default function App() {
               >
                 {isSubmitting ? <Loader2 className="animate-spin"/> : isVoteSubmitted ? "投票済み" : "優勝者に投票する"}
               </button>
+            )}
+
+            {safeFinalists.length !== 3 && activePhase === 'FINAL_VOTE' && !user.isAdmin && (
+              <div className="text-center text-slate-400 py-4 bg-slate-800 rounded-xl border border-yellow-800">
+                <Loader2 className="animate-spin inline-block mr-2"/>
+                管理者が決戦進出者を選出中です...
+              </div>
             )}
           </div>
         )}
