@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.6 (Reveal Sync Fix)";
+const APP_VERSION = "v3.7 (Sync Trigger Optimization)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -152,8 +152,10 @@ export default function App() {
 
   // ★3. 強制同期監視 (localDisplay の更新)
   useEffect(() => {
+    // タイムスタンプが更新され、かつ手元の記録より新しい場合のみ同期実行
     if (gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
-      console.log("Manual Sync Triggered");
+      console.log("Manual Sync Triggered at:", gameState.forceSyncTimestamp);
+      // localDisplayをgameStateの最新情報に更新
       setLocalDisplay(gameState); 
       setViewMode(null);
       setIsMenuOpen(false);
@@ -284,7 +286,13 @@ export default function App() {
     }
   };
 
-  // --- Admin Actions (これらはgameStateを更新する) ---
+  // --- Admin Actions ---
+  // ★管理者のフェーズ・コンビ切り替え時も強制同期命令を発行する
+  const updateGameStateAndSync = (updates: any) => {
+    updates.forceSyncTimestamp = Date.now();
+    update(ref(db, `${DB_ROOT}/gameState`), updates);
+  };
+  
   const updateGameState = (updates: any) => {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
@@ -295,14 +303,13 @@ export default function App() {
 
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
 
-    updateGameState({
+    updateGameStateAndSync({ // ★変更: 強制同期命令を追加
       currentComedianIndex: newIndex,
       isScoreRevealed: nextIsRevealed, 
       phase: 'SCORING' 
     });
   };
 
-  // ★修正: 結果オープン時に強制同期命令を追加
   const adminToggleReveal = () => {
     const currentId = gameState.comedians[gameState.currentComedianIndex].id;
     const newRevealState = !gameState.isScoreRevealed;
@@ -316,7 +323,7 @@ export default function App() {
       updates[`revealedStatus/${currentId}`] = true;
     }
     
-    updateGameState(updates);
+    updateGameState(updates); // adminToggleRevealは既にforceSyncTimestampを含んでいるため、そのままupdateGameStateを呼ぶ
   };
 
   const adminSaveFinalists = () => {
@@ -324,7 +331,8 @@ export default function App() {
       alert("決戦に進む3組を選択してください");
       return;
     }
-    updateGameState({ finalists: tempFinalists });
+    const updates = { finalists: tempFinalists };
+    updateGameState(updates);
     setShowFinalistModal(false);
     alert("決戦の3組を保存しました");
   };
@@ -924,10 +932,11 @@ export default function App() {
                   <Radio size={12} className="animate-pulse"/> 全員同期
                 </button>
                 <div className="w-[1px] bg-slate-700 mx-1 h-6 self-center"></div>
-                <button onClick={() => updateGameState({phase: 'PREDICTION'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>予想</button>
-                <button onClick={() => updateGameState({phase: 'PREDICTION_REVEAL'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION_REVEAL' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>発表</button>
-                <button onClick={() => updateGameState({phase: 'SCORING'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='SCORING' ? 'bg-red-600 text-white' : 'text-slate-400'}`}>採点</button>
-                <button onClick={() => updateGameState({phase: 'FINAL_VOTE', isScoreRevealed: false})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='FINAL_VOTE' ? 'bg-yellow-600 text-white' : 'text-slate-400'}`}>投票</button>
+                {/* ★フェーズボタンは updateGameStateAndSync を使うように変更 */}
+                <button onClick={() => updateGameStateAndSync({phase: 'PREDICTION'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>予想</button>
+                <button onClick={() => updateGameStateAndSync({phase: 'PREDICTION_REVEAL'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION_REVEAL' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>発表</button>
+                <button onClick={() => updateGameStateAndSync({phase: 'SCORING', isScoreRevealed: false})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='SCORING' ? 'bg-red-600 text-white' : 'text-slate-400'}`}>採点</button>
+                <button onClick={() => updateGameStateAndSync({phase: 'FINAL_VOTE', isScoreRevealed: false})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='FINAL_VOTE' ? 'bg-yellow-600 text-white' : 'text-slate-400'}`}>投票</button>
               </div>
             </div>
 
@@ -940,19 +949,23 @@ export default function App() {
                 </button>
                 <button onClick={() => {
                   if (gameState.currentComedianIndex < 9) adminChangeComedian(gameState.currentComedianIndex + 1);
-                  else updateGameState({phase: 'FINISHED'});
+                  else updateGameStateAndSync({phase: 'FINISHED'}); // ★変更: 終了時も同期命令
                 }} className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"><ChevronRight/></button>
               </div>
             ) : gameState.phase === 'FINAL_VOTE' ? (
               <div className="space-y-2">
                 <button 
-                  onClick={() => setShowFinalistModal(true)}
+                  onClick={() => {
+                    // モーダルを開く前に、現在の決戦進出者を一時変数にコピー
+                    setTempFinalists(gameState.finalists);
+                    setShowFinalistModal(true);
+                  }}
                   className="w-full py-2 bg-slate-800 border border-slate-700 hover:border-yellow-500 text-yellow-500 rounded text-sm font-bold"
                 >
                   決戦に進んだ3組を選ぶ
                 </button>
                 <button 
-                  onClick={() => updateGameState({isScoreRevealed: !gameState.isScoreRevealed})}
+                  onClick={adminToggleReveal} // ★変更: 投票結果オープンもadminToggleRevealに統一
                   className={`w-full py-3 font-bold rounded-lg flex items-center justify-center gap-2 transition-colors ${gameState.isScoreRevealed ? 'bg-slate-800 text-slate-300' : 'bg-red-600 hover:bg-red-500 text-white'}`}
                 >
                   {gameState.isScoreRevealed ? <><EyeOff size={18}/> 投票結果を隠す</> : <><Eye size={18}/> 投票結果オープン</>}
