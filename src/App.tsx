@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.8 (Strict Reveal Sync)";
+const APP_VERSION = "v3.9 (Sorting & Official Score)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -62,7 +62,8 @@ export default function App() {
     comedians: INITIAL_COMEDIANS,
     finalists: [] as number[],
     forceSyncTimestamp: 0, 
-    revealedStatus: {} as Record<string, boolean>
+    revealedStatus: {} as Record<string, boolean>,
+    officialScores: {} as Record<string, number | null> // ★追加：プロ審査員の合計得点
   });
 
   // --- Local Display State (参加者用フリーズデータ) ---
@@ -80,11 +81,16 @@ export default function App() {
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
+  // 採点一覧ソート用
+  const [sortBy, setSortBy] = useState<'id' | 'my' | 'avg' | 'rank'>('id');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
   // 最終決戦用
   const [selectedVoteId, setSelectedVoteId] = useState<number | null>(null);
   const [isVoteSubmitted, setIsVoteSubmitted] = useState(false);
   const [showFinalistModal, setShowFinalistModal] = useState(false); 
   const [tempFinalists, setTempFinalists] = useState<number[]>([]); 
+  const [adminOfficialScore, setAdminOfficialScore] = useState<string>(''); // 合計点入力用
 
   // ★閲覧モード
   const [viewMode, setViewMode] = useState<string | null>(null);
@@ -118,7 +124,8 @@ export default function App() {
           comedians: val.comedians || INITIAL_COMEDIANS,
           finalists: val.finalists || [],
           forceSyncTimestamp: val.forceSyncTimestamp || 0,
-          revealedStatus: val.revealedStatus || {}
+          revealedStatus: val.revealedStatus || {},
+          officialScores: val.officialScores || {} // ★追加
         };
         setGameState(newGameState);
 
@@ -139,7 +146,8 @@ export default function App() {
             comedians: INITIAL_COMEDIANS,
             finalists: [],
             forceSyncTimestamp: 0,
-            revealedStatus: {}
+            revealedStatus: {},
+            officialScores: {} // ★追加
         });
       }
     });
@@ -150,10 +158,9 @@ export default function App() {
     return () => { unsubGame(); unsubScores(); unsubPreds(); unsubVotes(); };
   }, []);
 
-  // ★3. 強制同期監視 (localDisplay の更新)
+  // ★3. 強制同期監視
   useEffect(() => {
     if (gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
-      console.log("Manual Sync Triggered at:", gameState.forceSyncTimestamp);
       setLocalDisplay(gameState); 
       setViewMode(null);
       setIsMenuOpen(false);
@@ -166,7 +173,15 @@ export default function App() {
     if (!localDisplay) return;
     setMyScore(85);
     setIsScoreSubmitted(false);
-  }, [localDisplay?.currentComedianIndex]);
+    
+    // ★管理者：コンビ切り替え時に合計点入力フォームを更新
+    if (user?.isAdmin) {
+      const currentId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
+      if (currentId) {
+        setAdminOfficialScore(String(localDisplay.officialScores[currentId] || ''));
+      }
+    }
+  }, [localDisplay?.currentComedianIndex, user?.isAdmin]);
 
   useEffect(() => {
     if (user && predictions[user.name]) {
@@ -285,7 +300,6 @@ export default function App() {
   };
 
   // --- Admin Actions ---
-  // ★管理者のフェーズ・コンビ切り替え時、forceSyncTimestampは更新しない
   const updateGameStateAndSync = (updates: any) => {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
@@ -300,7 +314,7 @@ export default function App() {
 
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
 
-    // ★変更: 強制同期命令を削除
+    // 強制同期命令を削除
     updateGameState({ 
       currentComedianIndex: newIndex,
       isScoreRevealed: nextIsRevealed, 
@@ -314,7 +328,7 @@ export default function App() {
     
     const updates: any = { 
       isScoreRevealed: newRevealState,
-      forceSyncTimestamp: Date.now() // ★残す: 結果オープン時のみ強制同期命令
+      forceSyncTimestamp: Date.now() // 結果オープン時のみ強制同期命令
     };
     
     if (newRevealState) {
@@ -329,7 +343,7 @@ export default function App() {
       alert("決戦に進む3組を選択してください");
       return;
     }
-    // ★変更: 決戦保存時も強制同期命令を発行（参加者に投票画面を表示させるため）
+    // 決戦保存時も強制同期命令を発行（参加者に投票画面を表示させるため）
     const updates = { 
       finalists: tempFinalists,
       forceSyncTimestamp: Date.now()
@@ -338,6 +352,27 @@ export default function App() {
     setShowFinalistModal(false);
     alert("決戦の3組を保存しました");
   };
+
+  // ★管理者: プロ審査員得点の保存
+  const adminSaveOfficialScore = () => {
+    if (!adminOfficialScore || isNaN(Number(adminOfficialScore))) {
+      alert("有効な合計得点を入力してください。");
+      return;
+    }
+    const currentComedianId = gameState.comedians[gameState.currentComedianIndex]?.id;
+    if (!currentComedianId) return;
+
+    const newScore = Number(adminOfficialScore);
+    
+    updateGameState({ 
+      officialScores: {
+        ...gameState.officialScores,
+        [currentComedianId]: newScore
+      }
+    });
+    alert(`プロ審査員得点 (${newScore}点) を保存しました。`);
+  };
+
 
   const triggerForceSync = () => {
     if (confirm("【確認】全参加者の画面を、現在の管理者画面と同じ状態に強制変更しますか？")) {
@@ -357,7 +392,8 @@ export default function App() {
         comedians: INITIAL_COMEDIANS,
         finalists: [],
         forceSyncTimestamp: 0,
-        revealedStatus: {}
+        revealedStatus: {},
+        officialScores: {} // ★追加
       },
       scores: {},
       predictions: {},
@@ -385,14 +421,52 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
+  // ★ソート機能を統合
   const ranking = useMemo(() => {
-    return safeComedians.map(c => {
+    const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
-      return { ...c, avg: parseFloat(avg) };
-    }).sort((a, b) => b.avg - a.avg);
-  }, [scores, safeComedians]);
+      const myScore = cScores[user?.name || ''] || 0;
+      
+      return { 
+        ...c, 
+        avg: parseFloat(avg), 
+        my: myScore,
+        rawAvg: parseFloat(avg) 
+      };
+    }).sort((a, b) => b.rawAvg - a.rawAvg); // デフォルトは平均点降順
+
+    // ソートロジック
+    const direction = sortDirection === 'asc' ? 1 : -1;
+    
+    return list.sort((a, b) => {
+      let comparison = 0;
+      if (sortBy === 'my') {
+        comparison = (a.my - b.my) * direction;
+      } else if (sortBy === 'avg') {
+        comparison = (a.rawAvg - b.rawAvg) * direction;
+      } else { // 'id' または 'rank' (平均点でソート)
+        comparison = (a.rawAvg - b.rawAvg) * -1; // 降順
+        if (sortBy === 'id') {
+          comparison = (a.id - b.id) * direction; // IDでソート
+        }
+      }
+      return comparison;
+    });
+
+  }, [scores, safeComedians, user?.name, sortBy, sortDirection]);
+
+  // ★採点一覧のソートヘッダーをトグル
+  const handleSort = (key: 'id' | 'my' | 'avg' | 'rank') => {
+    if (sortBy === key) {
+      setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(key);
+      setSortDirection(key === 'id' ? 'asc' : 'desc');
+    }
+  };
+
 
   const finalVoteResult = useMemo(() => {
     const result: Record<number, number> = {};
@@ -587,18 +661,39 @@ export default function App() {
                   <thead className="bg-slate-800 text-slate-400">
                     <tr>
                       <th className="p-3 text-center w-10">#</th>
-                      <th className="p-3">コンビ名</th>
-                      <th className="p-3 text-center">My点</th>
-                      <th className="p-3 text-center">平均</th>
-                      <th className="p-3 text-center">順位</th>
+                      <th 
+                        className="p-3 cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('id')}
+                      >
+                        コンビ名
+                      </th>
+                      <th 
+                        className="p-3 text-center cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('my')}
+                      >
+                        わたし
+                      </th>
+                      <th 
+                        className="p-3 text-center cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('avg')}
+                      >
+                        みんな
+                      </th>
+                      <th 
+                        className="p-3 text-center cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('rank')}
+                      >
+                        プロ審査員
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {safeComedians.map((c, i) => {
+                    {ranking.map((c, i) => { // 既にソート済みリストを使用
                       const isRevealed = displayData.revealedStatus?.[c.id];
                       const myScoreVal = scores[c.id]?.[user.name];
-                      const rankData = ranking.find(r => r.id === c.id);
+                      // 順位はリストのインデックスから計算 (ソート順がプロ審査員以外の場合は「-」)
                       const rankIndex = ranking.findIndex(r => r.id === c.id) + 1;
+                      const officialScore = displayData.officialScores[c.id];
 
                       return (
                         <tr key={c.id} className="hover:bg-slate-800/50">
@@ -608,17 +703,16 @@ export default function App() {
                             {myScoreVal !== undefined ? myScoreVal : "-"}
                           </td>
                           <td className="p-3 text-center font-bold text-yellow-500">
-                            {isRevealed && rankData?.avg > 0 ? rankData.avg : <span className="text-slate-600">???</span>}
+                            {isRevealed && c.rawAvg > 0 ? c.rawAvg : <span className="text-slate-600">???</span>}
                           </td>
                           <td className="p-3 text-center">
-                            {isRevealed && rankData?.avg > 0 ? (
-                              <span className={`inline-block w-6 h-6 rounded text-xs leading-6 
-                                ${rankIndex === 1 ? 'bg-yellow-500 text-black' : 
-                                  rankIndex === 2 ? 'bg-slate-400 text-black' : 
-                                  rankIndex === 3 ? 'bg-amber-700 text-white' : 'bg-slate-700'}`}>
-                                {rankIndex}
+                            {officialScore !== undefined && officialScore !== null ? (
+                              <span className={`inline-block px-2 py-1 rounded text-xs font-bold leading-none bg-red-600 text-white`}>
+                                {officialScore}
                               </span>
-                            ) : "-"}
+                            ) : (
+                              <span className="text-slate-500">-</span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -747,6 +841,14 @@ export default function App() {
               </div>
             </div>
 
+            {/* プロ審査員得点の表示 (平均点の下に配置) */}
+            {displayData.officialScores[currentComedian.id] !== undefined && displayData.officialScores[currentComedian.id] !== null && (
+                <div className="text-center text-xl font-bold text-red-400">
+                    プロ審査員得点: {displayData.officialScores[currentComedian.id]} 点
+                </div>
+            )}
+
+
             {!displayData.isScoreRevealed && displayData.phase === 'SCORING' && (
               <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
                 {!isScoreSubmitted ? (
@@ -805,7 +907,7 @@ export default function App() {
                     <Trophy size={16}/> 現在の順位
                   </div>
                   <div className="divide-y divide-slate-800">
-                    {ranking.filter(c => c.avg > 0).map((c, i) => (
+                    {ranking.filter(c => c.rawAvg > 0).map((c, i) => (
                       <div key={c.id} className={`flex items-center justify-between p-3 ${c.id===currentComedian.id ? 'bg-yellow-500/5' : ''}`}>
                         <div className="flex items-center gap-3">
                           <span className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold 
@@ -932,24 +1034,45 @@ export default function App() {
                 </button>
                 <div className="w-[1px] bg-slate-700 mx-1 h-6 self-center"></div>
                 {/* ★フェーズボタンは updateGameStateAndSync を使うように変更 */}
-                <button onClick={() => updateGameStateAndSync({phase: 'PREDICTION'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>予想</button>
-                <button onClick={() => updateGameStateAndSync({phase: 'PREDICTION_REVEAL'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION_REVEAL' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>発表</button>
-                <button onClick={() => updateGameStateAndSync({phase: 'SCORING', isScoreRevealed: false})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='SCORING' ? 'bg-red-600 text-white' : 'text-slate-400'}`}>採点</button>
-                <button onClick={() => updateGameStateAndSync({phase: 'FINAL_VOTE', isScoreRevealed: false})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='FINAL_VOTE' ? 'bg-yellow-600 text-white' : 'text-slate-400'}`}>投票</button>
+                <button onClick={() => updateGameState({phase: 'PREDICTION'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>予想</button>
+                <button onClick={() => updateGameState({phase: 'PREDICTION_REVEAL'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='PREDICTION_REVEAL' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>発表</button>
+                <button onClick={() => updateGameState({phase: 'SCORING'})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='SCORING' ? 'bg-red-600 text-white' : 'text-slate-400'}`}>採点</button>
+                <button onClick={() => updateGameState({phase: 'FINAL_VOTE', isScoreRevealed: false})} className={`px-2 py-1 rounded text-xs whitespace-nowrap ${gameState.phase==='FINAL_VOTE' ? 'bg-yellow-600 text-white' : 'text-slate-400'}`}>投票</button>
               </div>
             </div>
 
             {/* フェーズごとの操作パネル切り替え */}
             {gameState.phase === 'SCORING' ? (
-              <div className="flex items-center gap-2">
-                <button onClick={() => adminChangeComedian(Math.max(0, gameState.currentComedianIndex - 1))} className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"><ChevronLeft/></button>
-                <button onClick={adminToggleReveal} className={`flex-1 py-3 font-bold rounded-lg flex items-center justify-center gap-2 transition-colors ${gameState.isScoreRevealed ? 'bg-slate-800 text-slate-300' : 'bg-red-600 hover:bg-red-500 text-white'}`}>
-                  {gameState.isScoreRevealed ? <><EyeOff size={18}/> CLOSE</> : <><Eye size={18}/> 結果オープン</>}
-                </button>
-                <button onClick={() => {
-                  if (gameState.currentComedianIndex < 9) adminChangeComedian(gameState.currentComedianIndex + 1);
-                  else updateGameStateAndSync({phase: 'FINISHED'}); // ★変更: 終了時も同期命令
-                }} className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"><ChevronRight/></button>
+              <div className="space-y-3">
+                {/* プロ審査員得点入力 */}
+                <div className="flex items-center gap-2 bg-slate-800 p-2 rounded-lg border border-slate-700">
+                  <input
+                    type="number"
+                    min="600"
+                    max="700"
+                    placeholder="プロ審査員得点 (例: 650)"
+                    value={adminOfficialScore}
+                    onChange={e => setAdminOfficialScore(e.target.value)}
+                    className="flex-1 bg-transparent text-white text-sm px-2 py-1 rounded focus:outline-none"
+                  />
+                  <button
+                    onClick={adminSaveOfficialScore}
+                    className="bg-red-600 hover:bg-red-500 text-white text-xs px-3 py-1.5 rounded font-bold"
+                  >
+                    得点確定
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button onClick={() => adminChangeComedian(Math.max(0, gameState.currentComedianIndex - 1))} className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"><ChevronLeft/></button>
+                  <button onClick={adminToggleReveal} className={`flex-1 py-3 font-bold rounded-lg flex items-center justify-center gap-2 transition-colors ${gameState.isScoreRevealed ? 'bg-slate-800 text-slate-300' : 'bg-red-600 hover:bg-red-500 text-white'}`}>
+                    {gameState.isScoreRevealed ? <><EyeOff size={18}/> CLOSE</> : <><Eye size={18}/> 結果オープン</>}
+                  </button>
+                  <button onClick={() => {
+                    if (gameState.currentComedianIndex < 9) adminChangeComedian(gameState.currentComedianIndex + 1);
+                    else updateGameStateAndSync({phase: 'FINISHED'}); // ★変更: 終了時も同期命令
+                  }} className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"><ChevronRight/></button>
+                </div>
               </div>
             ) : gameState.phase === 'FINAL_VOTE' ? (
               <div className="space-y-2">
