@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, onValue, set, update, get, child } from "firebase/database";
+import { getDatabase, ref, onValue, set, update, get, child, remove } from "firebase/database";
 import { 
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.10 (Detailed Score Menu)";
+const APP_VERSION = "v3.11 (Re-Login Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -63,7 +63,7 @@ export default function App() {
     finalists: [] as number[],
     forceSyncTimestamp: 0, 
     revealedStatus: {} as Record<string, boolean>,
-    officialScores: {} as Record<string, number | null> // ★追加：プロ審査員の合計得点
+    officialScores: {} as Record<string, number | null>
   });
 
   // --- Local Display State (参加者用フリーズデータ) ---
@@ -90,7 +90,7 @@ export default function App() {
   const [isVoteSubmitted, setIsVoteSubmitted] = useState(false);
   const [showFinalistModal, setShowFinalistModal] = useState(false); 
   const [tempFinalists, setTempFinalists] = useState<number[]>([]); 
-  const [adminOfficialScore, setAdminOfficialScore] = useState<string>(''); // 合計点入力用
+  const [adminOfficialScore, setAdminOfficialScore] = useState<string>('');
 
   // ★閲覧モード
   const [viewMode, setViewMode] = useState<string | null>(null);
@@ -128,7 +128,7 @@ export default function App() {
           finalists: val.finalists || [],
           forceSyncTimestamp: val.forceSyncTimestamp || 0,
           revealedStatus: val.revealedStatus || {},
-          officialScores: val.officialScores || {} // ★追加
+          officialScores: val.officialScores || {}
         };
         setGameState(newGameState);
 
@@ -150,7 +150,7 @@ export default function App() {
             finalists: [],
             forceSyncTimestamp: 0,
             revealedStatus: {},
-            officialScores: {} // ★追加
+            officialScores: {}
         });
       }
     });
@@ -168,7 +168,7 @@ export default function App() {
       setViewMode(null);
       setIsMenuOpen(false);
       lastSyncTimestamp.current = gameState.forceSyncTimestamp;
-      setDetailComedianId(null); // 詳細画面もリセット
+      setDetailComedianId(null);
     }
   }, [gameState.forceSyncTimestamp, gameState]); 
 
@@ -219,6 +219,7 @@ export default function App() {
     const dbRef = ref(db);
     try {
       const snapshot = await get(child(dbRef, `${DB_ROOT}/users/${nameToCheck}`));
+      // ★修正箇所: snapshot.exists() == true の場合、現在ログイン中のユーザーがいるということ。
       if (snapshot.exists()) {
         alert("その名前は既に使用されています。別の名前を入力してください。");
         return;
@@ -229,7 +230,7 @@ export default function App() {
 
     const userData = { name: nameToCheck, isAdmin: isAdminLogin };
     
-    // ユーザー登録
+    // ユーザー登録（セッション開始）
     set(ref(db, `${DB_ROOT}/users/${nameToCheck}`), {
       joinedAt: Date.now(),
       isAdmin: isAdminLogin
@@ -241,6 +242,10 @@ export default function App() {
 
   const handleLogout = () => {
     if (confirm("ログアウトしますか？")) {
+      // ★修正: ログアウト時にユーザーDBからエントリを削除する
+      if (user?.name) {
+          remove(ref(db, `${DB_ROOT}/users/${user.name}`));
+      }
       localStorage.removeItem('m1_user_v2');
       setUser(null);
       setLoginName("");
@@ -304,10 +309,6 @@ export default function App() {
   };
 
   // --- Admin Actions ---
-  const updateGameStateAndSync = (updates: any) => {
-    update(ref(db, `${DB_ROOT}/gameState`), updates);
-  };
-  
   const updateGameState = (updates: any) => {
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
@@ -397,7 +398,7 @@ export default function App() {
         finalists: [],
         forceSyncTimestamp: 0,
         revealedStatus: {},
-        officialScores: {} // ★追加
+        officialScores: {}
       },
       scores: {},
       predictions: {},
@@ -728,7 +729,7 @@ export default function App() {
       </div>
 
       <main className="p-4 max-w-2xl mx-auto space-y-6">
-        
+
         {/* --- SCORE DETAIL INDEX / VIEWER --- */}
         {activePhase === 'SCORE_DETAIL' && (
           <>
@@ -739,7 +740,9 @@ export default function App() {
                 <h3 className="text-xl font-bold text-white mb-4">結果公開済みのコンビ</h3>
                 <div className="grid gap-3">
                   {safeComedians.map(c => {
-                    const isRevealed = displayData.revealedStatus?.[c.id];
+                    // コンビが現在採点中または過去にオープン済みであれば選択可能
+                    const isRevealed = displayData.revealedStatus?.[c.id]; 
+                    
                     return (
                       <button 
                         key={c.id}
@@ -1184,7 +1187,7 @@ export default function App() {
                   </button>
                   <button onClick={() => {
                     if (gameState.currentComedianIndex < 9) adminChangeComedian(gameState.currentComedianIndex + 1);
-                    else updateGameStateAndSync({phase: 'FINISHED'}); // ★変更: 終了時も同期命令
+                    else updateGameState({phase: 'FINISHED'}); // ★変更: 終了時も同期命令
                   }} className="p-3 bg-slate-800 rounded-lg hover:bg-slate-700 text-white"><ChevronRight/></button>
                 </div>
               </div>
