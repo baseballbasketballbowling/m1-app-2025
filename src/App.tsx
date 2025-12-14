@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.9 (Sorting & Official Score)";
+const APP_VERSION = "v3.10 (Detailed Score Menu)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -96,6 +96,9 @@ export default function App() {
   const [viewMode, setViewMode] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
+  // コンビ詳細ページ表示用
+  const [detailComedianId, setDetailComedianId] = useState<number | null>(null); 
+  
   // 最後に処理した同期命令の時刻
   const lastSyncTimestamp = useRef(0);
 
@@ -165,6 +168,7 @@ export default function App() {
       setViewMode(null);
       setIsMenuOpen(false);
       lastSyncTimestamp.current = gameState.forceSyncTimestamp;
+      setDetailComedianId(null); // 詳細画面もリセット
     }
   }, [gameState.forceSyncTimestamp, gameState]); 
 
@@ -484,6 +488,76 @@ export default function App() {
   // RENDER
   // =================================================================
 
+  // ★個別採点詳細画面のレンダリング関数
+  const renderScoreDetail = (comedianId: number) => {
+    const comedian = safeComedians.find(c => c.id === comedianId);
+    const cScores = scores[comedianId] || {};
+    const officialScore = displayData.officialScores[comedianId];
+
+    if (!comedian || !displayData.revealedStatus?.[comedianId]) {
+      return (
+        <div className="text-center py-10 text-slate-400 bg-slate-900 rounded-xl">
+          このコンビの採点結果はまだ公開されていません。
+          <button 
+            onClick={() => setDetailComedianId(null)}
+            className="mt-4 text-sm text-blue-400 hover:text-blue-300 underline block mx-auto"
+          >
+            一覧に戻る
+          </button>
+        </div>
+      );
+    }
+    
+    const values = Object.values(cScores) as number[];
+    const total = values.reduce((a, b) => a + b, 0);
+    const avg = values.length > 0 ? (total / values.length).toFixed(1) : "0.0";
+
+
+    return (
+      <div className="animate-fade-in space-y-6">
+        <div className="text-center mb-6">
+          <h2 className="text-3xl font-black text-yellow-500 mb-2">{comedian.name}</h2>
+          <p className="text-slate-400 text-sm">採点詳細</p>
+        </div>
+
+        <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 space-y-3">
+            <div className="flex justify-around text-center border-b border-slate-700 pb-3">
+                <div>
+                    <div className="text-sm text-slate-400">みんなの平均点</div>
+                    <div className="text-4xl font-black text-yellow-400">{avg}</div>
+                </div>
+                <div>
+                    <div className="text-sm text-slate-400">プロ審査員得点</div>
+                    <div className="text-4xl font-black text-red-500">{officialScore !== undefined && officialScore !== null ? officialScore : "-"}</div>
+                </div>
+            </div>
+            
+            <button 
+              onClick={() => setDetailComedianId(null)}
+              className="w-full text-center py-2 bg-slate-800 rounded text-green-400 hover:bg-slate-700 text-sm"
+            >
+              一覧に戻る
+            </button>
+        </div>
+
+        <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
+            <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300">
+                <Users size={16}/> 参加者別採点
+            </div>
+            <div className="p-4 grid grid-cols-3 sm:grid-cols-4 gap-3">
+                {Object.entries(cScores).map(([name, score]) => (
+                    <div key={name} className={`p-2 rounded text-center border ${name===user?.name ? 'bg-blue-900/50 border-blue-500' : 'bg-slate-800 border-slate-700'}`}>
+                        <div className="text-[10px] text-slate-400 truncate mb-1">{name}</div>
+                        <div className={`text-xl font-black ${score>=95 ? 'text-yellow-500' : score>=90 ? 'text-red-400' : 'text-white'}`}>{score}</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+      </div>
+    );
+  };
+
+
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
@@ -570,7 +644,7 @@ export default function App() {
                   
                   {viewMode && (
                     <button 
-                      onClick={() => { setViewMode(null); setIsMenuOpen(false); }}
+                      onClick={() => { setViewMode(null); setIsMenuOpen(false); setDetailComedianId(null); }}
                       className="w-full text-left px-3 py-2 text-sm text-green-400 hover:bg-slate-700 rounded flex items-center gap-2 mb-2 bg-green-900/20"
                     >
                       <LayoutDashboard size={16}/> 現在の進行に戻る
@@ -579,13 +653,13 @@ export default function App() {
 
                   <div className="px-3 py-1 text-[10px] text-slate-500 font-bold">開始前</div>
                   <button 
-                    onClick={() => { setViewMode('PREDICTION'); setIsMenuOpen(false); }}
+                    onClick={() => { setViewMode('PREDICTION'); setIsMenuOpen(false); setDetailComedianId(null); }}
                     className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'PREDICTION' ? 'bg-blue-900/50 text-blue-300' : 'hover:bg-slate-700 text-slate-200'}`}
                   >
                     <Crown size={16} className="text-yellow-500"/> 3連単予想を編集
                   </button>
                   <button 
-                    onClick={() => { setViewMode('PREDICTION_REVEAL'); setIsMenuOpen(false); }}
+                    onClick={() => { setViewMode('PREDICTION_REVEAL'); setIsMenuOpen(false); setDetailComedianId(null); }}
                     className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'PREDICTION_REVEAL' ? 'bg-purple-900/50 text-purple-300' : 'hover:bg-slate-700 text-slate-200'}`}
                   >
                     <List size={16} className="text-purple-400"/> みんなの予想
@@ -593,15 +667,21 @@ export default function App() {
 
                   <div className="px-3 py-1 text-[10px] text-slate-500 font-bold mt-2">1stラウンド</div>
                   <button 
-                    onClick={() => { setViewMode('SCORE_HISTORY'); setIsMenuOpen(false); }}
-                    className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'SCORE_HISTORY' ? 'bg-orange-900/50 text-orange-300' : 'hover:bg-slate-700 text-slate-200'}`}
+                    onClick={() => { setViewMode('SCORE_HISTORY'); setIsMenuOpen(false); setDetailComedianId(null); }}
+                    className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'SCORE_HISTORY' && detailComedianId === null ? 'bg-orange-900/50 text-orange-300' : 'hover:bg-slate-700 text-slate-200'}`}
                   >
                     <ClipboardList size={16} className="text-orange-500"/> 採点結果一覧
+                  </button>
+                  <button 
+                    onClick={() => { setViewMode('SCORE_DETAIL'); setIsMenuOpen(false); setDetailComedianId(null); }}
+                    className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'SCORE_DETAIL' ? 'bg-orange-900/50 text-orange-300' : 'hover:bg-slate-700 text-slate-200'}`}
+                  >
+                    <BarChart3 size={16} className="text-orange-500"/> コンビ毎採点詳細
                   </button>
 
                   <div className="px-3 py-1 text-[10px] text-slate-500 font-bold mt-2">最終決戦</div>
                   <button 
-                    onClick={() => { setViewMode('FINAL_VOTE'); setIsMenuOpen(false); }}
+                    onClick={() => { setViewMode('FINAL_VOTE'); setIsMenuOpen(false); setDetailComedianId(null); }}
                     className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'FINAL_VOTE' ? 'bg-red-900/50 text-red-300' : 'hover:bg-slate-700 text-slate-200'}`}
                   >
                     <Vote size={16} className="text-red-500"/> 投票一覧
@@ -627,6 +707,7 @@ export default function App() {
         ${viewMode ? 'bg-slate-700' : displayData.phase === 'PREDICTION' ? 'bg-blue-600' : displayData.phase === 'PREDICTION_REVEAL' ? 'bg-purple-600' : displayData.phase === 'SCORING' ? 'bg-red-700' : displayData.phase === 'FINAL_VOTE' ? 'bg-yellow-600' : 'bg-green-600'}`}>
         
         {viewMode === 'SCORE_HISTORY' && "📊 採点結果一覧"}
+        {viewMode === 'SCORE_DETAIL' && (detailComedianId ? `📊 ${getComedianName(detailComedianId)} 採点詳細` : "📊 コンビ別採点詳細")}
         {viewMode === 'PREDICTION' && "📝 予想の確認・編集モード"}
         {viewMode === 'PREDICTION_REVEAL' && "👀 みんなの予想 確認モード"}
         {viewMode === 'FINAL_VOTE' && "🔥 最終決戦 投票状況"}
@@ -647,6 +728,40 @@ export default function App() {
       </div>
 
       <main className="p-4 max-w-2xl mx-auto space-y-6">
+        
+        {/* --- SCORE DETAIL INDEX / VIEWER --- */}
+        {activePhase === 'SCORE_DETAIL' && (
+          <>
+            {detailComedianId ? (
+              renderScoreDetail(detailComedianId)
+            ) : (
+              <div className="animate-fade-in space-y-6">
+                <h3 className="text-xl font-bold text-white mb-4">結果公開済みのコンビ</h3>
+                <div className="grid gap-3">
+                  {safeComedians.map(c => {
+                    const isRevealed = displayData.revealedStatus?.[c.id];
+                    return (
+                      <button 
+                        key={c.id}
+                        onClick={() => {
+                          if (isRevealed) setDetailComedianId(c.id);
+                        }}
+                        disabled={!isRevealed}
+                        className={`w-full text-left p-4 rounded-xl border transition-all flex justify-between items-center
+                          ${isRevealed 
+                            ? 'bg-slate-800 border-green-700 hover:bg-slate-700' 
+                            : 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed'}`}
+                      >
+                        <span className={`font-bold text-lg ${isRevealed ? 'text-white' : 'text-slate-600'}`}>{c.name}</span>
+                        {isRevealed ? <CheckCircle2 className="text-green-500" size={20}/> : <EyeOff size={20}/>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        )}
 
         {/* --- SCORE HISTORY PHASE --- */}
         {activePhase === 'SCORE_HISTORY' && (
@@ -690,9 +805,8 @@ export default function App() {
                   <tbody className="divide-y divide-slate-800">
                     {ranking.map((c, i) => { // 既にソート済みリストを使用
                       const isRevealed = displayData.revealedStatus?.[c.id];
-                      const myScoreVal = scores[c.id]?.[user.name];
-                      // 順位はリストのインデックスから計算 (ソート順がプロ審査員以外の場合は「-」)
-                      const rankIndex = ranking.findIndex(r => r.id === c.id) + 1;
+                      const myScoreVal = scores[c.id]?.[user?.name || ''];
+                      const rankData = ranking.find(r => r.id === c.id);
                       const officialScore = displayData.officialScores[c.id];
 
                       return (
