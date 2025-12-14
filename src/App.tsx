@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.5 (Admin Live View Fix)";
+const APP_VERSION = "v3.6 (Reveal Sync Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -154,7 +154,6 @@ export default function App() {
   useEffect(() => {
     if (gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
       console.log("Manual Sync Triggered");
-      // localDisplayをgameStateの最新情報に更新
       setLocalDisplay(gameState); 
       setViewMode(null);
       setIsMenuOpen(false);
@@ -303,11 +302,20 @@ export default function App() {
     });
   };
 
+  // ★修正: 結果オープン時に強制同期命令を追加
   const adminToggleReveal = () => {
     const currentId = gameState.comedians[gameState.currentComedianIndex].id;
     const newRevealState = !gameState.isScoreRevealed;
-    const updates: any = { isScoreRevealed: newRevealState };
-    if (newRevealState) updates[`revealedStatus/${currentId}`] = true;
+    
+    const updates: any = { 
+      isScoreRevealed: newRevealState,
+      forceSyncTimestamp: Date.now() // 強制同期命令
+    };
+    
+    if (newRevealState) {
+      updates[`revealedStatus/${currentId}`] = true;
+    }
+    
     updateGameState(updates);
   };
 
