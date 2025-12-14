@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.7 (Sync Trigger Optimization)";
+const APP_VERSION = "v3.8 (Strict Reveal Sync)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -152,10 +152,8 @@ export default function App() {
 
   // ★3. 強制同期監視 (localDisplay の更新)
   useEffect(() => {
-    // タイムスタンプが更新され、かつ手元の記録より新しい場合のみ同期実行
     if (gameState.forceSyncTimestamp > lastSyncTimestamp.current) {
       console.log("Manual Sync Triggered at:", gameState.forceSyncTimestamp);
-      // localDisplayをgameStateの最新情報に更新
       setLocalDisplay(gameState); 
       setViewMode(null);
       setIsMenuOpen(false);
@@ -287,9 +285,8 @@ export default function App() {
   };
 
   // --- Admin Actions ---
-  // ★管理者のフェーズ・コンビ切り替え時も強制同期命令を発行する
+  // ★管理者のフェーズ・コンビ切り替え時、forceSyncTimestampは更新しない
   const updateGameStateAndSync = (updates: any) => {
-    updates.forceSyncTimestamp = Date.now();
     update(ref(db, `${DB_ROOT}/gameState`), updates);
   };
   
@@ -303,7 +300,8 @@ export default function App() {
 
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
 
-    updateGameStateAndSync({ // ★変更: 強制同期命令を追加
+    // ★変更: 強制同期命令を削除
+    updateGameState({ 
       currentComedianIndex: newIndex,
       isScoreRevealed: nextIsRevealed, 
       phase: 'SCORING' 
@@ -316,14 +314,14 @@ export default function App() {
     
     const updates: any = { 
       isScoreRevealed: newRevealState,
-      forceSyncTimestamp: Date.now() // 強制同期命令
+      forceSyncTimestamp: Date.now() // ★残す: 結果オープン時のみ強制同期命令
     };
     
     if (newRevealState) {
       updates[`revealedStatus/${currentId}`] = true;
     }
     
-    updateGameState(updates); // adminToggleRevealは既にforceSyncTimestampを含んでいるため、そのままupdateGameStateを呼ぶ
+    updateGameState(updates); 
   };
 
   const adminSaveFinalists = () => {
@@ -331,7 +329,11 @@ export default function App() {
       alert("決戦に進む3組を選択してください");
       return;
     }
-    const updates = { finalists: tempFinalists };
+    // ★変更: 決戦保存時も強制同期命令を発行（参加者に投票画面を表示させるため）
+    const updates = { 
+      finalists: tempFinalists,
+      forceSyncTimestamp: Date.now()
+    };
     updateGameState(updates);
     setShowFinalistModal(false);
     alert("決戦の3組を保存しました");
@@ -366,11 +368,9 @@ export default function App() {
   };
 
   // --- Helpers ---
-  // ★表示に使用するデータソースの決定: Adminは gameState (ライブ)、Participantは localDisplay (フリーズ)
   const dataForRendering = user?.isAdmin ? gameState : (localDisplay || gameState);
   const displayData = dataForRendering; 
   
-  // 安全装置: 配列チェックとインデックスチェックを厳格化
   const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
   const safeFinalists = Array.isArray(displayData.finalists) ? displayData.finalists : [];
 
@@ -403,7 +403,6 @@ export default function App() {
     return result;
   }, [finalVotes, safeFinalists]);
 
-  // ★最終的な表示モードの決定
   const activePhase = viewMode || displayData.phase;
 
 
