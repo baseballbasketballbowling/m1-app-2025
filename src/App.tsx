@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.11 (Re-Login Fix)";
+const APP_VERSION = "v3.12 (Basic User Auth)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -51,6 +51,7 @@ export default function App() {
   // --- User State ---
   const [user, setUser] = useState<{name: string, isAdmin: boolean} | null>(null);
   const [loginName, setLoginName] = useState("");
+  const [userPassword, setUserPassword] = useState(""); // ★追加：一般ユーザーのパスワード
   const [isAdminLogin, setIsAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
 
@@ -204,33 +205,62 @@ export default function App() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginName.trim()) return;
+
+    // パスワードチェックは管理者/一般共通で必要
+    if (!userPassword.trim() && !isAdminLogin) {
+        alert("パスワードを入力してください。");
+        return;
+    }
     if (/[.#$[\]]/.test(loginName)) {
       alert("名前に . # $ [ ] は使えません");
       return;
     }
-    if (isAdminLogin && adminPassword !== "0121") {
-      alert("管理者パスワードが違います");
-      return;
-    }
-
+    
     const nameToCheck = loginName.trim();
+    
+    // ★修正1: 認証情報の存在チェックと新規ユーザー判定
+    const authSnapshot = await get(child(ref(db), `${DB_ROOT}/auth/${nameToCheck}`));
+    const isNewUser = !authSnapshot.exists();
 
-    // 重複チェック
-    const dbRef = ref(db);
-    try {
-      const snapshot = await get(child(dbRef, `${DB_ROOT}/users/${nameToCheck}`));
-      // ★修正箇所: snapshot.exists() == true の場合、現在ログイン中のユーザーがいるということ。
-      if (snapshot.exists()) {
-        alert("その名前は既に使用されています。別の名前を入力してください。");
+    // 1. 管理者チェック
+    if (isAdminLogin) {
+      if (adminPassword !== "0121") {
+        alert("管理者パスワードが違います");
         return;
       }
-    } catch (error) {
-      console.error("Login check error:", error);
     }
 
+    // 2. ニックネームの重複チェック（現在使用中のセッション）
+    const sessionSnapshot = await get(child(ref(db), `${DB_ROOT}/users/${nameToCheck}`));
+    if (sessionSnapshot.exists()) {
+        alert("その名前は既に他のセッションで使用されています。");
+        return;
+    }
+    
+    // 3. 一般ユーザーの認証または新規登録
+    if (!isAdminLogin) {
+        if (isNewUser) {
+            // 新規登録
+            if (!confirm(`「${nameToCheck}」で新規ユーザー登録します。\nパスワード: ${userPassword} でよろしいですか？`)) {
+                return;
+            }
+            // パスワードを平文で保存 (簡易認証のため)
+            await set(ref(db, `${DB_ROOT}/auth/${nameToCheck}`), { 
+                password: userPassword.trim(),
+                isAdmin: false
+            });
+        } else {
+            // 既存ユーザーの認証
+            if (authSnapshot.val()?.password !== userPassword.trim()) {
+                alert("パスワードが違います。");
+                return;
+            }
+        }
+    }
+    
     const userData = { name: nameToCheck, isAdmin: isAdminLogin };
     
-    // ユーザー登録（セッション開始）
+    // ユーザーセッション登録（ログイン中を示す）
     set(ref(db, `${DB_ROOT}/users/${nameToCheck}`), {
       joinedAt: Date.now(),
       isAdmin: isAdminLogin
@@ -242,13 +272,14 @@ export default function App() {
 
   const handleLogout = () => {
     if (confirm("ログアウトしますか？")) {
-      // ★修正: ログアウト時にユーザーDBからエントリを削除する
+      // ログアウト時にユーザーセッションをDBから削除
       if (user?.name) {
           remove(ref(db, `${DB_ROOT}/users/${user.name}`));
       }
       localStorage.removeItem('m1_user_v2');
       setUser(null);
       setLoginName("");
+      setUserPassword(""); // パスワードもクリア
       setAdminPassword("");
       setIsAdminLogin(false);
       setIsMenuOpen(false);
@@ -403,7 +434,8 @@ export default function App() {
       scores: {},
       predictions: {},
       finalVotes: {},
-      users: {} 
+      users: {},
+      auth: {} // ★認証情報もリセット
     });
     alert("リセット完了");
   };
@@ -581,6 +613,17 @@ export default function App() {
             </div>
             
             <div className="pt-2">
+              <label className="block text-slate-400 text-sm mb-1">パスワード</label>
+              <input 
+                type="password" 
+                value={userPassword}
+                onChange={e => setUserPassword(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded p-3 text-white focus:ring-2 focus:ring-yellow-500 outline-none"
+                placeholder="パスワードを入力"
+              />
+            </div>
+
+            <div className="pt-2">
               <label className="flex items-center gap-2 text-slate-400 text-sm cursor-pointer mb-2">
                 <input 
                   type="checkbox" 
@@ -599,7 +642,7 @@ export default function App() {
                     value={adminPassword}
                     onChange={e => setAdminPassword(e.target.value)}
                     className="w-full bg-slate-800 border border-red-800 rounded p-3 text-white focus:ring-2 focus:ring-red-500 outline-none"
-                    placeholder="パスワードを入力" 
+                    placeholder="管理者パスワードを入力" 
                   />
                 </div>
               )}
