@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.14 (Force Logout Persist)";
+const APP_VERSION = "v3.16 (Scores Only Reset)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -95,6 +95,7 @@ export default function App() {
   const [selectedVoteId, setSelectedVoteId] = useState<number | null>(null);
   const [isVoteSubmitted, setIsVoteSubmitted] = useState(false);
   const [showFinalistModal, setShowFinalistModal] = useState(false); 
+  const [showResetModal, setShowResetModal] = useState(false); // ★追加：リセットモーダル
   const [tempFinalists, setTempFinalists] = useState<number[]>([]); 
   const [adminOfficialScore, setAdminOfficialScore] = useState<string>('');
 
@@ -465,7 +466,7 @@ export default function App() {
 
   // ★管理者: 強制ログアウト
   const adminForceLogout = async (name: string) => {
-    if (!user?.isAdmin || !confirm(`ユーザー「${name}」のセッションを強制的に終了させ、次回ログインを阻止します。よろしいですか？`)) return;
+    if (!user?.isAdmin || !confirm(`ユーザー「${name}」のセッションを強制的に終了させます。よろしいですか？`)) return;
     try {
         // 1. セッションを削除（ログイン中リストから消える）
         await remove(ref(db, `${DB_ROOT}/users/${name}`));
@@ -479,7 +480,6 @@ export default function App() {
     }
   };
 
-
   const triggerForceSync = () => {
     if (confirm("【確認】全参加者の画面を、現在の管理者画面と同じ状態に強制変更しますか？")) {
       update(ref(db, `${DB_ROOT}/gameState`), {
@@ -488,28 +488,52 @@ export default function App() {
     }
   };
 
-  const resetDatabase = async () => {
-    if (!confirm("【危険】全データを消去してリセットしますか？")) return;
-    await set(ref(db, `${DB_ROOT}`), {
-      gameState: {
-        phase: 'PREDICTION',
-        currentComedianIndex: 0,
-        isScoreRevealed: false,
-        comedians: INITIAL_COMEDIANS,
-        finalists: [],
-        forceSyncTimestamp: 0,
-        revealedStatus: {},
-        officialScores: {}
-      },
-      scores: {},
-      predictions: {},
-      finalVotes: {},
-      users: {},
-      auth: {},
-      userLogoutCommands: {} // ★リセット対象に追加
-    });
-    alert("リセット完了");
+  // ★データリセット実行関数
+  const executeDatabaseReset = async (type: 'all' | 'predictions_scores') => {
+      if (type === 'all') {
+          if (!confirm("【危険】全データ（ユーザー認証、採点、予想、セッション）を消去してリセットしますか？")) return;
+          await set(ref(db, `${DB_ROOT}`), {
+            gameState: {
+              phase: 'PREDICTION',
+              currentComedianIndex: 0,
+              isScoreRevealed: false,
+              comedians: INITIAL_COMEDIANS,
+              finalists: [],
+              forceSyncTimestamp: 0,
+              revealedStatus: {},
+              officialScores: {}
+            },
+            scores: {},
+            predictions: {},
+            finalVotes: {},
+            users: {},
+            auth: {},
+            userLogoutCommands: {}
+          });
+          alert("全データリセット完了");
+      } else if (type === 'predictions_scores') {
+          if (!confirm("予想と採点データのみを消去します。よろしいですか？\n(ユーザー認証情報は保持されます)")) return;
+          
+          const updates: Record<string, any> = {
+            scores: {},
+            predictions: {},
+            finalVotes: {},
+            'gameState/officialScores': {},
+            'gameState/revealedStatus': {},
+            'gameState/currentComedianIndex': 0,
+            'gameState/isScoreRevealed': false,
+            'gameState/phase': 'PREDICTION',
+            'gameState/finalists': [],
+            'gameState/forceSyncTimestamp': Date.now(), // 参加者画面を強制リセット
+          };
+
+          // ユーザー認証情報はそのまま
+          await update(ref(db, `${DB_ROOT}`), updates);
+          alert("予想・採点データのみをリセット完了しました。");
+      }
+      setShowResetModal(false);
   };
+
 
   // --- Helpers ---
   const dataForRendering = user?.isAdmin ? gameState : (localDisplay || gameState);
@@ -867,9 +891,6 @@ export default function App() {
       </div>
 
       <main className="p-4 max-w-2xl mx-auto space-y-6">
-
-        {/* --- USER MANAGEMENT PHASE --- */}
-        {activePhase === 'USER_MANAGEMENT' && renderUserManagement()}
 
         {/* --- SCORE DETAIL INDEX / VIEWER --- */}
         {activePhase === 'SCORE_DETAIL' && (
@@ -1367,7 +1388,7 @@ export default function App() {
               </div>
             )}
 
-            <button onClick={resetDatabase} className="w-full mt-2 text-xs text-slate-600 hover:text-red-500 py-1">データリセット</button>
+            <button onClick={() => setShowResetModal(true)} className="w-full mt-2 text-xs text-slate-600 hover:text-red-500 py-1">データリセット</button>
           </div>
         </div>
       )}
@@ -1403,6 +1424,33 @@ export default function App() {
               <button onClick={() => setShowFinalistModal(false)} className="flex-1 py-2 bg-slate-800 rounded text-slate-400">キャンセル</button>
               <button onClick={adminSaveFinalists} className="flex-1 py-2 bg-yellow-600 hover:bg-yellow-500 text-white font-bold rounded">決定</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* データリセットモーダル */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-slate-900 w-full max-w-sm rounded-xl border border-slate-700 p-6 space-y-4">
+            <h3 className="text-xl font-bold text-white text-center text-red-400">🚨 データリセット</h3>
+            <p className="text-sm text-slate-400">リセットの範囲を選択してください。実行後、全参加者の画面が同期されます。</p>
+            <div className="space-y-3">
+                <button
+                    onClick={() => executeDatabaseReset('predictions_scores')}
+                    className="w-full py-3 bg-orange-600/30 border border-orange-700 text-orange-300 rounded-lg font-bold hover:bg-orange-600/50 transition-colors"
+                >
+                    予想・採点データのみリセット
+                    <p className='font-normal text-xs mt-1 text-slate-400'>(ユーザー名とパスワードは保持)</p>
+                </button>
+                 <button
+                    onClick={() => executeDatabaseReset('all')}
+                    className="w-full py-3 bg-red-600/30 border border-red-700 text-red-300 rounded-lg font-bold hover:bg-red-600/50 transition-colors"
+                >
+                    全データ（ユーザー認証情報含む）リセット
+                    <p className='font-normal text-xs mt-1 text-slate-400'>(新規ユーザー登録から必要)</p>
+                </button>
+            </div>
+            <button onClick={() => setShowResetModal(false)} className="w-full py-2 bg-slate-700 rounded text-slate-400 mt-4">キャンセル</button>
           </div>
         </div>
       )}
