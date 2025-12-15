@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.16 (Scores Only Reset)";
+const APP_VERSION = "v3.17 (Separate Score/Prediction Reset)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -489,49 +489,59 @@ export default function App() {
   };
 
   // ★データリセット実行関数
-  const executeDatabaseReset = async (type: 'all' | 'predictions_scores') => {
-      if (type === 'all') {
-          if (!confirm("【危険】全データ（ユーザー認証、採点、予想、セッション）を消去してリセットしますか？")) return;
-          await set(ref(db, `${DB_ROOT}`), {
-            gameState: {
-              phase: 'PREDICTION',
-              currentComedianIndex: 0,
-              isScoreRevealed: false,
-              comedians: INITIAL_COMEDIANS,
-              finalists: [],
-              forceSyncTimestamp: 0,
-              revealedStatus: {},
-              officialScores: {}
-            },
-            scores: {},
-            predictions: {},
-            finalVotes: {},
-            users: {},
-            auth: {},
-            userLogoutCommands: {}
-          });
-          alert("全データリセット完了");
-      } else if (type === 'predictions_scores') {
-          if (!confirm("予想と採点データのみを消去します。よろしいですか？\n(ユーザー認証情報は保持されます)")) return;
-          
-          const updates: Record<string, any> = {
-            scores: {},
-            predictions: {},
-            finalVotes: {},
-            'gameState/officialScores': {},
-            'gameState/revealedStatus': {},
-            'gameState/currentComedianIndex': 0,
-            'gameState/isScoreRevealed': false,
-            'gameState/phase': 'PREDICTION',
-            'gameState/finalists': [],
-            'gameState/forceSyncTimestamp': Date.now(), // 参加者画面を強制リセット
-          };
+  const executeDatabaseReset = async (type: 'all' | 'scores_only' | 'predictions_only') => {
+      const baseUpdates: Record<string, any> = {
+          'gameState/officialScores': {},
+          'gameState/revealedStatus': {},
+          'gameState/currentComedianIndex': 0,
+          'gameState/isScoreRevealed': false,
+          'gameState/phase': 'PREDICTION',
+          'gameState/finalists': [],
+          'gameState/forceSyncTimestamp': Date.now(), // 参加者画面を強制リセット
+      };
+      
+      try {
+          if (type === 'all') {
+              if (!confirm("【危険】全データ（ユーザー認証、採点、予想、セッション）を消去してリセットしますか？")) return;
+              await set(ref(db, `${DB_ROOT}`), {
+                gameState: { ...baseUpdates, comedians: INITIAL_COMEDIANS, forceSyncTimestamp: Date.now() },
+                scores: {},
+                predictions: {},
+                finalVotes: {},
+                users: {},
+                auth: {},
+                userLogoutCommands: {}
+              });
+              alert("全データリセット完了");
+          } else if (type === 'scores_only') {
+              if (!confirm("採点データ（1stラウンドの採点結果、最終投票結果、公式得点、進行状況）のみを消去します。よろしいですか？\n(予想とユーザー情報は保持されます)")) return;
+              
+              const updates: Record<string, any> = {
+                scores: {},
+                finalVotes: {},
+                ...baseUpdates,
+                'gameState/comedians': INITIAL_COMEDIANS // コンビリストは初期値に戻す
+              };
 
-          // ユーザー認証情報はそのまま
-          await update(ref(db, `${DB_ROOT}`), updates);
-          alert("予想・採点データのみをリセット完了しました。");
+              await update(ref(db, `${DB_ROOT}`), updates);
+              alert("採点データのみをリセット完了しました。");
+          } else if (type === 'predictions_only') {
+              if (!confirm("予想データのみを消去します。よろしいですか？\n(採点結果、ユーザー情報は保持されます)")) return;
+
+              const updates: Record<string, any> = {
+                predictions: {},
+                'gameState/forceSyncTimestamp': Date.now(),
+              };
+
+              // gameState内の予想関連以外の情報は保持
+              await update(ref(db, `${DB_ROOT}`), updates);
+              alert("予想データのみをリセット完了しました。");
+          }
+      } catch(e) {
+          alert(`リセット中にエラーが発生しました: ${e}`);
+      } finally {
+          setShowResetModal(false);
       }
-      setShowResetModal(false);
   };
 
 
@@ -891,6 +901,9 @@ export default function App() {
       </div>
 
       <main className="p-4 max-w-2xl mx-auto space-y-6">
+
+        {/* --- USER MANAGEMENT PHASE --- */}
+        {activePhase === 'USER_MANAGEMENT' && renderUserManagement()}
 
         {/* --- SCORE DETAIL INDEX / VIEWER --- */}
         {activePhase === 'SCORE_DETAIL' && (
@@ -1436,11 +1449,18 @@ export default function App() {
             <p className="text-sm text-slate-400">リセットの範囲を選択してください。実行後、全参加者の画面が同期されます。</p>
             <div className="space-y-3">
                 <button
-                    onClick={() => executeDatabaseReset('predictions_scores')}
+                    onClick={() => executeDatabaseReset('predictions_only')} // ★変更
+                    className="w-full py-3 bg-blue-600/30 border border-blue-700 text-blue-300 rounded-lg font-bold hover:bg-blue-600/50 transition-colors"
+                >
+                    予想データのみリセット
+                    <p className='font-normal text-xs mt-1 text-slate-400'>(採点結果、ユーザー情報は保持)</p>
+                </button>
+                <button
+                    onClick={() => executeDatabaseReset('scores_only')} // ★変更
                     className="w-full py-3 bg-orange-600/30 border border-orange-700 text-orange-300 rounded-lg font-bold hover:bg-orange-600/50 transition-colors"
                 >
-                    予想・採点データのみリセット
-                    <p className='font-normal text-xs mt-1 text-slate-400'>(ユーザー名とパスワードは保持)</p>
+                    採点データのみリセット
+                    <p className='font-normal text-xs mt-1 text-slate-400'>(予想、ユーザー情報は保持)</p>
                 </button>
                  <button
                     onClick={() => executeDatabaseReset('all')}
