@@ -11,7 +11,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.13 (User Management)";
+const APP_VERSION = "v3.14 (Force Logout Persist)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -77,6 +77,7 @@ export default function App() {
   // ★ユーザー管理用データ
   const [allAuthUsers, setAllAuthUsers] = useState<Record<string, any>>({});
   const [activeSessionUsers, setActiveSessionUsers] = useState<Record<string, any>>({});
+  const [logoutCommands, setLogoutCommands] = useState<Record<string, any>>({}); // ★追加：ログアウト命令
 
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
@@ -107,14 +108,14 @@ export default function App() {
   // 最後に処理した同期命令の時刻
   const lastSyncTimestamp = useRef(0);
 
-  // 1. ログイン復元
+  // 1. ログイン復元（LocalStorageからユーザー情報をロード）
   useEffect(() => {
     const saved = localStorage.getItem('m1_user_v2');
     if (saved) {
       try { setUser(JSON.parse(saved)); } catch(e) {}
     }
   }, []);
-
+  
   // 2. Firebase同期 (gameStateの受信)
   useEffect(() => {
     const gameRef = ref(db, `${DB_ROOT}/gameState`);
@@ -123,6 +124,7 @@ export default function App() {
     const votesRef = ref(db, `${DB_ROOT}/finalVotes`);
     const authRef = ref(db, `${DB_ROOT}/auth`);
     const usersRef = ref(db, `${DB_ROOT}/users`);
+    const logoutCommandRef = ref(db, `${DB_ROOT}/userLogoutCommands`); // ★追加
 
     const unsubGame = onValue(gameRef, (snap) => {
       const val = snap.val();
@@ -162,9 +164,9 @@ export default function App() {
       }
     });
     
-    // ★ユーザー管理用リスナー
     const unsubAuth = onValue(authRef, (snap) => setAllAuthUsers(snap.val() || {}));
     const unsubUsers = onValue(usersRef, (snap) => setActiveSessionUsers(snap.val() || {}));
+    const unsubLogoutCommands = onValue(logoutCommandRef, (snap) => setLogoutCommands(snap.val() || {})); // ★追加
 
 
     const unsubScores = onValue(scoresRef, (snap) => setScores(snap.val() || {}));
@@ -178,6 +180,7 @@ export default function App() {
         unsubVotes(); 
         unsubAuth();
         unsubUsers();
+        unsubLogoutCommands(); // ★クリーンアップ
     };
   }, []);
 
@@ -192,7 +195,22 @@ export default function App() {
     }
   }, [gameState.forceSyncTimestamp, gameState]); 
 
-  // 4. データ反映系 (localDisplayが更新されたら自分の入力状態などをリセット)
+  // ★4. 強制ログアウトコマンド監視 (自分が対象の場合、Local Storageを破壊してログアウト)
+  useEffect(() => {
+    if (user?.name && logoutCommands[user.name]) {
+      console.log(`[LOGOUT COMMAND] Received command for user: ${user.name}`);
+      // LocalStorageから認証情報を削除
+      localStorage.removeItem('m1_user_v2');
+      // DBからコマンドを削除 (他のブラウザがこのコマンドを処理した場合でも安全に動作させるため)
+      remove(ref(db, `${DB_ROOT}/userLogoutCommands/${user.name}`));
+      // 画面上のセッションをクリア
+      setUser(null);
+      alert(`管理者の操作により、強制的にログアウトされました。`);
+    }
+  }, [user?.name, logoutCommands]); 
+
+
+  // 5. データ反映系 (localDisplayが更新されたら自分の入力状態などをリセット)
   useEffect(() => {
     if (!localDisplay) return;
     setMyScore(85);
@@ -434,6 +452,10 @@ export default function App() {
     try {
         await remove(ref(db, `${DB_ROOT}/auth/${name}`));
         await remove(ref(db, `${DB_ROOT}/users/${name}`));
+        // 削除されたユーザーがログイン状態だった場合、強制的にログアウトさせる
+        if (activeSessionUsers[name]) {
+             await set(ref(db, `${DB_ROOT}/userLogoutCommands/${name}`), true);
+        }
         alert(`ユーザー「${name}」を完全に削除しました。`);
     } catch (e) {
         alert("削除に失敗しました。");
@@ -443,9 +465,13 @@ export default function App() {
 
   // ★管理者: 強制ログアウト
   const adminForceLogout = async (name: string) => {
-    if (!user?.isAdmin || !confirm(`ユーザー「${name}」のセッションを強制的に終了させます。よろしいですか？`)) return;
+    if (!user?.isAdmin || !confirm(`ユーザー「${name}」のセッションを強制的に終了させ、次回ログインを阻止します。よろしいですか？`)) return;
     try {
+        // 1. セッションを削除（ログイン中リストから消える）
         await remove(ref(db, `${DB_ROOT}/users/${name}`));
+        // 2. ブラウザ側の LocalStorage を無効化するためのコマンドを発行
+        await set(ref(db, `${DB_ROOT}/userLogoutCommands/${name}`), Date.now()); 
+
         alert(`ユーザー「${name}」を強制ログアウトさせました。`);
     } catch (e) {
         alert("強制ログアウトに失敗しました。");
@@ -479,7 +505,8 @@ export default function App() {
       predictions: {},
       finalVotes: {},
       users: {},
-      auth: {}
+      auth: {},
+      userLogoutCommands: {} // ★リセット対象に追加
     });
     alert("リセット完了");
   };
