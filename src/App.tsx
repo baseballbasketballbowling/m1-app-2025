@@ -5,13 +5,13 @@ import {
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
   CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
-  Menu, X, LayoutDashboard, Radio, ClipboardList, Vote
+  Menu, X, LayoutDashboard, Radio, ClipboardList, Vote, UserMinus, UserX
 } from 'lucide-react';
 
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.12 (Basic User Auth)";
+const APP_VERSION = "v3.13 (User Management)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -73,6 +73,10 @@ export default function App() {
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
   const [predictions, setPredictions] = useState<Record<string, any>>({});
   const [finalVotes, setFinalVotes] = useState<Record<string, number>>({}); 
+  
+  // ★ユーザー管理用データ
+  const [allAuthUsers, setAllAuthUsers] = useState<Record<string, any>>({});
+  const [activeSessionUsers, setActiveSessionUsers] = useState<Record<string, any>>({});
 
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
@@ -117,6 +121,8 @@ export default function App() {
     const scoresRef = ref(db, `${DB_ROOT}/scores`);
     const predsRef = ref(db, `${DB_ROOT}/predictions`);
     const votesRef = ref(db, `${DB_ROOT}/finalVotes`);
+    const authRef = ref(db, `${DB_ROOT}/auth`);
+    const usersRef = ref(db, `${DB_ROOT}/users`);
 
     const unsubGame = onValue(gameRef, (snap) => {
       const val = snap.val();
@@ -155,11 +161,24 @@ export default function App() {
         });
       }
     });
+    
+    // ★ユーザー管理用リスナー
+    const unsubAuth = onValue(authRef, (snap) => setAllAuthUsers(snap.val() || {}));
+    const unsubUsers = onValue(usersRef, (snap) => setActiveSessionUsers(snap.val() || {}));
+
+
     const unsubScores = onValue(scoresRef, (snap) => setScores(snap.val() || {}));
     const unsubPreds = onValue(predsRef, (snap) => setPredictions(snap.val() || {}));
     const unsubVotes = onValue(votesRef, (snap) => setFinalVotes(snap.val() || {}));
 
-    return () => { unsubGame(); unsubScores(); unsubPreds(); unsubVotes(); };
+    return () => { 
+        unsubGame(); 
+        unsubScores(); 
+        unsubPreds(); 
+        unsubVotes(); 
+        unsubAuth();
+        unsubUsers();
+    };
   }, []);
 
   // ★3. 強制同期監視
@@ -218,7 +237,7 @@ export default function App() {
     
     const nameToCheck = loginName.trim();
     
-    // ★修正1: 認証情報の存在チェックと新規ユーザー判定
+    // ★認証情報の存在チェックと新規ユーザー判定
     const authSnapshot = await get(child(ref(db), `${DB_ROOT}/auth/${nameToCheck}`));
     const isNewUser = !authSnapshot.exists();
 
@@ -279,7 +298,7 @@ export default function App() {
       localStorage.removeItem('m1_user_v2');
       setUser(null);
       setLoginName("");
-      setUserPassword(""); // パスワードもクリア
+      setUserPassword(""); 
       setAdminPassword("");
       setIsAdminLogin(false);
       setIsMenuOpen(false);
@@ -409,6 +428,31 @@ export default function App() {
     alert(`プロ審査員得点 (${newScore}点) を保存しました。`);
   };
 
+  // ★管理者: ユーザー削除
+  const adminDeleteUser = async (name: string) => {
+    if (!user?.isAdmin || !confirm(`ユーザー「${name}」の認証情報とセッションを完全に削除します。よろしいですか？`)) return;
+    try {
+        await remove(ref(db, `${DB_ROOT}/auth/${name}`));
+        await remove(ref(db, `${DB_ROOT}/users/${name}`));
+        alert(`ユーザー「${name}」を完全に削除しました。`);
+    } catch (e) {
+        alert("削除に失敗しました。");
+        console.error("User deletion failed:", e);
+    }
+  };
+
+  // ★管理者: 強制ログアウト
+  const adminForceLogout = async (name: string) => {
+    if (!user?.isAdmin || !confirm(`ユーザー「${name}」のセッションを強制的に終了させます。よろしいですか？`)) return;
+    try {
+        await remove(ref(db, `${DB_ROOT}/users/${name}`));
+        alert(`ユーザー「${name}」を強制ログアウトさせました。`);
+    } catch (e) {
+        alert("強制ログアウトに失敗しました。");
+        console.error("Force logout failed:", e);
+    }
+  };
+
 
   const triggerForceSync = () => {
     if (confirm("【確認】全参加者の画面を、現在の管理者画面と同じ状態に強制変更しますか？")) {
@@ -435,7 +479,7 @@ export default function App() {
       predictions: {},
       finalVotes: {},
       users: {},
-      auth: {} // ★認証情報もリセット
+      auth: {}
     });
     alert("リセット完了");
   };
@@ -516,75 +560,85 @@ export default function App() {
 
   const activePhase = viewMode || displayData.phase;
 
-
   // =================================================================
-  // RENDER
+  // RENDER User Management View
   // =================================================================
-
-  // ★個別採点詳細画面のレンダリング関数
-  const renderScoreDetail = (comedianId: number) => {
-    const comedian = safeComedians.find(c => c.id === comedianId);
-    const cScores = scores[comedianId] || {};
-    const officialScore = displayData.officialScores[comedianId];
-
-    if (!comedian || !displayData.revealedStatus?.[comedianId]) {
-      return (
-        <div className="text-center py-10 text-slate-400 bg-slate-900 rounded-xl">
-          このコンビの採点結果はまだ公開されていません。
-          <button 
-            onClick={() => setDetailComedianId(null)}
-            className="mt-4 text-sm text-blue-400 hover:text-blue-300 underline block mx-auto"
-          >
-            一覧に戻る
-          </button>
-        </div>
-      );
-    }
+  const renderUserManagement = () => {
+    // 認証ユーザーリスト (登録済み)
+    const registeredUsers = Object.keys(allAuthUsers).map(name => ({
+      name,
+      isLoggedIn: !!activeSessionUsers[name],
+      isAdmin: allAuthUsers[name]?.isAdmin || false,
+      isAuth: true
+    })).sort((a, b) => b.isLoggedIn - a.isLoggedIn || a.name.localeCompare(b.name));
     
-    const values = Object.values(cScores) as number[];
-    const total = values.reduce((a, b) => a + b, 0);
-    const avg = values.length > 0 ? (total / values.length).toFixed(1) : "0.0";
-
+    // ログイン中のユーザーリスト (セッションのみ)
+    const loggedInUsers = Object.keys(activeSessionUsers)
+      .filter(name => !allAuthUsers[name]) // 認証情報がないセッション（管理者セッションなど）
+      .map(name => ({
+        name,
+        isLoggedIn: true,
+        isAdmin: activeSessionUsers[name]?.isAdmin || false,
+        isAuth: false
+      }));
 
     return (
       <div className="animate-fade-in space-y-6">
-        <div className="text-center mb-6">
-          <h2 className="text-3xl font-black text-yellow-500 mb-2">{comedian.name}</h2>
-          <p className="text-slate-400 text-sm">採点詳細</p>
+        <h2 className="text-2xl font-black text-white mb-4">ユーザー管理</h2>
+
+        {/* 登録ユーザーリスト (永続) */}
+        <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
+          <h3 className="font-bold text-lg text-indigo-400 mb-3 flex items-center gap-2">
+            登録ユーザー ({registeredUsers.length}人)
+          </h3>
+          <p className="text-sm text-slate-500 mb-4">ニックネームとパスワードが登録されています。</p>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {registeredUsers.map(u => (
+              <div key={u.name} className="flex justify-between items-center bg-slate-800 p-3 rounded-lg border border-slate-700">
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-0.5 text-xs font-bold rounded ${u.isLoggedIn ? 'bg-green-600' : 'bg-slate-600'}`}>
+                    {u.isLoggedIn ? 'IN' : 'OFF'}
+                  </span>
+                  <span className={`font-bold ${u.isAdmin ? 'text-yellow-500' : 'text-white'}`}>{u.name}</span>
+                  {u.isAdmin && <span className="text-xs text-yellow-600">★Admin</span>}
+                </div>
+                <button 
+                  onClick={() => adminDeleteUser(u.name)}
+                  className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-slate-700 transition"
+                  title="認証情報とセッションを完全削除"
+                >
+                  <UserMinus size={16}/>
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 space-y-3">
-            <div className="flex justify-around text-center border-b border-slate-700 pb-3">
-                <div>
-                    <div className="text-sm text-slate-400">みんなの平均点</div>
-                    <div className="text-4xl font-black text-yellow-400">{avg}</div>
-                </div>
-                <div>
-                    <div className="text-sm text-slate-400">プロ審査員得点</div>
-                    <div className="text-4xl font-black text-red-500">{officialScore !== undefined && officialScore !== null ? officialScore : "-"}</div>
-                </div>
-            </div>
-            
-            <button 
-              onClick={() => setDetailComedianId(null)}
-              className="w-full text-center py-2 bg-slate-800 rounded text-green-400 hover:bg-slate-700 text-sm"
-            >
-              一覧に戻る
-            </button>
-        </div>
-
-        <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
-            <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300">
-                <Users size={16}/> 参加者別採点
-            </div>
-            <div className="p-4 grid grid-cols-3 sm:grid-cols-4 gap-3">
-                {Object.entries(cScores).map(([name, score]) => (
-                    <div key={name} className={`p-2 rounded text-center border ${name===user?.name ? 'bg-blue-900/50 border-blue-500' : 'bg-slate-800 border-slate-700'}`}>
-                        <div className="text-[10px] text-slate-400 truncate mb-1">{name}</div>
-                        <div className={`text-xl font-black ${score>=95 ? 'text-yellow-500' : score>=90 ? 'text-red-400' : 'text-white'}`}>{score}</div>
-                    </div>
-                ))}
-            </div>
+        {/* ログイン中ユーザーリスト (セッションのみ) */}
+        <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
+          <h3 className="font-bold text-lg text-red-400 mb-3 flex items-center gap-2">
+            ログイン中ユーザー ({loggedInUsers.length + registeredUsers.filter(u => u.isLoggedIn).length}人)
+          </h3>
+          <p className="text-sm text-slate-500 mb-4">現在セッションが有効なユーザーです。</p>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {[...registeredUsers.filter(u => u.isLoggedIn), ...loggedInUsers].map(u => (
+               <div key={u.name} className="flex justify-between items-center bg-slate-800 p-3 rounded-lg border border-slate-700">
+                  <span className={`font-bold ${u.isAdmin ? 'text-yellow-500' : 'text-white'}`}>
+                    {u.name}
+                  </span>
+                  <button 
+                    onClick={() => adminForceLogout(u.name)}
+                    className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-slate-700 transition"
+                    title="強制ログアウト（セッション削除）"
+                  >
+                    <UserX size={16}/> 強制ログアウト
+                  </button>
+               </div>
+            ))}
+            {loggedInUsers.length + registeredUsers.filter(u => u.isLoggedIn).length === 0 && (
+                <div className="text-center text-slate-600 py-4">現在ログイン中のユーザーはいません。</div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -730,6 +784,19 @@ export default function App() {
                   >
                     <Vote size={16} className="text-red-500"/> 投票一覧
                   </button>
+                  
+                  {user.isAdmin && (
+                    <>
+                      <div className="px-3 py-1 text-[10px] text-slate-500 font-bold mt-2">管理者設定</div>
+                      <button 
+                        onClick={() => { setViewMode('USER_MANAGEMENT'); setIsMenuOpen(false); setDetailComedianId(null); }}
+                        className={`w-full text-left px-3 py-2 text-sm rounded flex items-center gap-2 ${viewMode === 'USER_MANAGEMENT' ? 'bg-indigo-900/50 text-indigo-300' : 'hover:bg-slate-700 text-slate-200'}`}
+                      >
+                        <Users size={16} className="text-indigo-400"/> ユーザー管理
+                      </button>
+                    </>
+                  )}
+
 
                   <div className="border-t border-slate-700/50 my-2"></div>
 
@@ -750,6 +817,7 @@ export default function App() {
       <div className={`text-center py-2 text-sm font-bold text-white shadow-lg transition-colors duration-300
         ${viewMode ? 'bg-slate-700' : displayData.phase === 'PREDICTION' ? 'bg-blue-600' : displayData.phase === 'PREDICTION_REVEAL' ? 'bg-purple-600' : displayData.phase === 'SCORING' ? 'bg-red-700' : displayData.phase === 'FINAL_VOTE' ? 'bg-yellow-600' : 'bg-green-600'}`}>
         
+        {viewMode === 'USER_MANAGEMENT' && "👤 ユーザー管理"}
         {viewMode === 'SCORE_HISTORY' && "📊 採点結果一覧"}
         {viewMode === 'SCORE_DETAIL' && (detailComedianId ? `📊 ${getComedianName(detailComedianId)} 採点詳細` : "📊 コンビ別採点詳細")}
         {viewMode === 'PREDICTION' && "📝 予想の確認・編集モード"}
@@ -772,6 +840,9 @@ export default function App() {
       </div>
 
       <main className="p-4 max-w-2xl mx-auto space-y-6">
+
+        {/* --- USER MANAGEMENT PHASE --- */}
+        {activePhase === 'USER_MANAGEMENT' && renderUserManagement()}
 
         {/* --- SCORE DETAIL INDEX / VIEWER --- */}
         {activePhase === 'SCORE_DETAIL' && (
