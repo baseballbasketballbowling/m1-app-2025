@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.28 (Official Score Sync Fix)";
+const APP_VERSION = "v3.29 (Score Submit & Rank UI Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -83,8 +83,8 @@ export default function App() {
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
+  // ★修正: ローカルで管理
+  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
@@ -214,17 +214,22 @@ export default function App() {
 
   // 5. データ反映系
   useEffect(() => {
-    if (!localDisplay) return;
-    setMyScore(85);
-    setIsScoreSubmitted(false);
+    if (!localDisplay || !user) return;
+    
+    // ★修正: コンビIDが変わったら、そのコンビの点数をチェックし、提出済み状態を更新
+    const currentComedianId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
+    const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
+    
+    setIsScoreSubmitted(hasSubmittedScore);
+    setMyScore(scores[currentComedianId]?.[user.name] || 85); // 既存の点数か85をセット
+    
     
     if (user?.isAdmin) {
-      const currentId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
-      if (currentId) {
-        setAdminOfficialScore(String(localDisplay.officialScores[currentId] || ''));
+      if (currentComedianId) {
+        setAdminOfficialScore(String(localDisplay.officialScores[currentComedianId] || ''));
       }
     }
-  }, [localDisplay?.currentComedianIndex, user?.isAdmin]);
+  }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); // scoresを依存に追加
 
   useEffect(() => {
     if (user && predictions[user.name]) {
@@ -1438,21 +1443,25 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* ★修正: プロ審査員得点を順位表に併記し、プロ審査員得点順で表示 */}
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300 whitespace-nowrap">
-                    <Trophy size={16}/> 現在の順位
+                    <Trophy size={16}/> 現在の順位 (プロ審査員得点順)
                   </div>
                   <div className="divide-y divide-slate-800">
-                    {ranking.filter(c => c.rawAvg > 0).map((c, i) => (
+                    {ranking.map((c, i) => (
                       <div key={c.id} className={`flex items-center justify-between p-3 ${c.id===currentComedian.id ? 'bg-yellow-500/5' : ''}`}>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 w-3/5">
                           <span className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold 
                             ${i===0 ? 'bg-yellow-500 text-black' : i===1 ? 'bg-slate-400 text-black' : i===2 ? 'bg-amber-700 text-white' : 'bg-slate-800 text-slate-500'}`}>
                             {i+1}
                           </span>
                           <span className="font-bold text-sm whitespace-nowrap">{c.name}</span>
                         </div>
-                        <span className="font-bold text-yellow-500">{ranking.find(r => r.id === c.id)?.avg}</span>
+                        <div className="flex gap-4 justify-end text-sm w-2/5">
+                           <span className="text-yellow-500 font-bold whitespace-nowrap">{c.avg}</span>
+                           <span className="text-red-400 font-bold whitespace-nowrap">{c.official || '-'}</span>
+                        </div>
                       </div>
                     ))}
                   </div>
