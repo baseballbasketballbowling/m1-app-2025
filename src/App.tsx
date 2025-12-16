@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.33 (Restored & Fixed)";
+const APP_VERSION = "v3.28 (Official Score Sync Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -83,8 +83,8 @@ export default function App() {
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
-  // ローカル提出管理
-  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
@@ -148,6 +148,7 @@ export default function App() {
         };
         setGameState(newGameState);
 
+        // 初回ロード時のみ localDisplay を設定
         setLocalDisplay(prev => {
           if (prev === null) {
             lastSyncTimestamp.current = newGameState.forceSyncTimestamp;
@@ -214,19 +215,11 @@ export default function App() {
 
   // 5. データ反映系
   useEffect(() => {
-    if (!localDisplay || !user) {
-        // ユーザーがいない、または表示データがない場合は初期化
-        setIsScoreSubmitted(false);
-        setMyScore(85);
-        if (user?.isAdmin) setAdminOfficialScore('');
-        return;
-    }
+    if (!localDisplay || !user) return;
     
-    // 現在のコンビID
-    const safeComedians = Array.isArray(localDisplay.comedians) ? localDisplay.comedians : INITIAL_COMEDIANS;
-    const currentComedianId = safeComedians[localDisplay.currentComedianIndex]?.id;
+    const currentComedianId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
     
-    // ★修正: 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
+    // 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
     const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
     
     setIsScoreSubmitted(hasSubmittedScore);
@@ -234,8 +227,7 @@ export default function App() {
     
     if (user?.isAdmin) {
       if (currentComedianId) {
-        const offScore = localDisplay.officialScores ? localDisplay.officialScores[currentComedianId] : null;
-        setAdminOfficialScore(String(offScore || ''));
+        setAdminOfficialScore(String(localDisplay.officialScores[currentComedianId] || ''));
       }
     }
   }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); 
@@ -467,6 +459,7 @@ export default function App() {
 
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
 
+    // 強制同期命令を削除
     updateGameState({ 
       currentComedianIndex: newIndex,
       isScoreRevealed: nextIsRevealed, 
@@ -514,6 +507,7 @@ export default function App() {
 
     const newScore = Number(adminOfficialScore);
     
+    // ★修正: 得点確定時に forceSyncTimestamp も更新して参加者に即座に反映させる
     update(ref(db, `${DB_ROOT}/gameState`), {
       [`officialScores/${currentComedianId}`]: newScore,
       forceSyncTimestamp: Date.now()
@@ -631,8 +625,9 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
+  // ★ソート機能を統合
   const ranking = useMemo(() => {
-    // ★ガード: displayDataの整合性チェック
+    // 安定化のためのガード節
     if (!displayData || !displayData.comedians) return [];
 
     const list = safeComedians.map(c => {
@@ -641,9 +636,8 @@ export default function App() {
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
       
-      // ★安全にプロ得点を取得 (displayData.officialScores が未定義の場合に対応)
-      const officialScore = (displayData.officialScores && displayData.officialScores[c.id]) || 0;
-      const isRevealed = (displayData.revealedStatus && displayData.revealedStatus[c.id]) || false;
+      const officialScore = displayData.officialScores[c.id] || 0;
+      const isRevealed = displayData.revealedStatus?.[c.id] || false;
 
       return { 
         ...c, 
@@ -651,18 +645,21 @@ export default function App() {
         my: myScore,
         rawAvg: parseFloat(avg),
         official: officialScore,
-        isRevealed 
+        isRevealed // 発表済みフラグ
       };
     }).sort((a, b) => {
+        // 1. 発表済みを優先
         if (a.isRevealed !== b.isRevealed) {
             return a.isRevealed ? -1 : 1;
         }
+        // 2. プロ審査員得点でデフォルト降順 (発表済み同士の場合)
         return b.official - a.official;
     });
 
     const direction = sortDirection === 'asc' ? 1 : -1;
     
     return list.sort((a, b) => {
+      // 発表済み優先は常に維持
       if (a.isRevealed !== b.isRevealed) {
          return a.isRevealed ? -1 : 1;
       }
@@ -672,15 +669,15 @@ export default function App() {
         comparison = (a.my - b.my) * direction;
       } else if (sortBy === 'avg') {
         comparison = (a.rawAvg - b.rawAvg) * direction;
-      } else if (sortBy === 'official') { 
+      } else if (sortBy === 'official') { // ★プロ審査員得点
         comparison = (a.official - b.official) * direction;
-      } else { 
+      } else { // 'id'
         comparison = (a.id - b.id) * direction;
       }
       return comparison;
     });
 
-  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData]); // displayData全体を依存に
+  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData?.officialScores, displayData?.revealedStatus]);
 
   const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
@@ -807,10 +804,10 @@ export default function App() {
   const renderScoreDetail = (comedianId: number) => {
     const comedian = safeComedians.find(c => c.id === comedianId);
     const cScores = scores[comedianId] || {};
-    // ★修正: 安全にアクセス
-    const officialScore = (displayData.officialScores && displayData.officialScores[comedianId]);
+    // ★修正: displayData?.officialScores を安全に参照
+    const officialScore = displayData?.officialScores[comedianId];
 
-    if (!comedian || !displayData.revealedStatus?.[comedianId]) {
+    if (!comedian || !displayData?.revealedStatus?.[comedianId]) {
       return (
         <div className="text-center py-10 text-slate-400 bg-slate-900 rounded-xl">
           このコンビの採点結果はまだ公開されていません。
@@ -1102,8 +1099,8 @@ export default function App() {
                       const revealedB = displayData.revealedStatus?.[b.id] ? 1 : 0;
                       if (revealedA !== revealedB) return revealedB - revealedA; // オープン済みが先
 
-                      const scoreA = (displayData.officialScores && displayData.officialScores[a.id]) || 0;
-                      const scoreB = (displayData.officialScores && displayData.officialScores[b.id]) || 0;
+                      const scoreA = displayData.officialScores[a.id] || 0;
+                      const scoreB = displayData.officialScores[b.id] || 0;
                       return scoreB - scoreA; // プロ審査員得点の降順
                     })
                     .map(c => {
@@ -1175,7 +1172,7 @@ export default function App() {
                     {ranking.map((c, i) => { 
                       const isRevealed = displayData.revealedStatus?.[c.id];
                       const myScoreVal = scores[c.id]?.[user?.name || ''];
-                      const officialScore = displayData.officialScores && displayData.officialScores[c.id];
+                      const officialScore = displayData.officialScores[c.id];
 
                       return (
                         <tr key={c.id} className="hover:bg-slate-800/50">
@@ -1375,7 +1372,7 @@ export default function App() {
             </div>
 
             {/* プロ審査員得点の表示 (平均点の下に配置) */}
-            {displayData.officialScores && displayData.officialScores[currentComedian.id] !== undefined && displayData.officialScores[currentComedian.id] !== null && (
+            {displayData.officialScores[currentComedian.id] !== undefined && displayData.officialScores[currentComedian.id] !== null && (
                 <div className="text-center text-xl font-bold text-red-400 whitespace-nowrap">
                     プロ審査員得点: {displayData.officialScores[currentComedian.id]} 点
                 </div>
@@ -1452,7 +1449,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* ★修正: プロ審査員得点を順位表に併記し、プロ審査員得点順で表示 */}
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300 whitespace-nowrap">
                     <Trophy size={16}/> 現在の順位 (プロ審査員得点順)
