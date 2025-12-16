@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.21 (Prediction Stats)";
+const APP_VERSION = "v3.23 (Loser Edit Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -617,6 +617,7 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
+  // ★ソート機能を統合
   const ranking = useMemo(() => {
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
@@ -794,6 +795,13 @@ export default function App() {
             <h1 className="text-3xl font-black text-white mb-2 tracking-tighter">M-1 VOTING</h1>
             <p className="text-slate-400">Realtime Scoring App</p>
           </div>
+          
+          <div className="bg-slate-800/50 p-4 rounded-lg mb-6 text-sm text-slate-300 space-y-2 border border-slate-700">
+            <p>※新規ユーザーはニックネームと任意のパスワードを設定してください。</p>
+            <p className="text-red-400">※セキュリティが甘いので流出してもよいパスワードにしてください。</p>
+            <p>※ニックネームは後ほど編集できます。</p>
+          </div>
+
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-slate-400 text-sm mb-1">ニックネーム</label>
