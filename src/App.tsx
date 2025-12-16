@@ -6,13 +6,13 @@ import {
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
   CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
   Menu, X, LayoutDashboard, Radio, ClipboardList, Vote, UserMinus, UserX, UserCog,
-  TrendingUp, Award
+  TrendingUp, Award, Sparkles
 } from 'lucide-react';
 
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.33 (Score Fix & Rank UI Updated)";
+const APP_VERSION = "v3.34 (Welcome Modal Added)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -83,7 +83,7 @@ export default function App() {
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // ★修正: ローカルで管理
   const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
@@ -103,6 +103,7 @@ export default function App() {
   // ★閲覧モード
   const [viewMode, setViewMode] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false); // ★ウェルカムモーダル用
 
   // コンビ詳細ページ表示用
   const [detailComedianId, setDetailComedianId] = useState<number | null>(null); 
@@ -215,7 +216,6 @@ export default function App() {
   // 5. データ反映系
   useEffect(() => {
     if (!localDisplay || !user) {
-        // ユーザーがまだ認証されていない場合やデータがない場合は、状態をリセット
         setIsScoreSubmitted(false);
         setMyScore(85);
         if (user?.isAdmin) {
@@ -225,8 +225,6 @@ export default function App() {
     }
     
     const currentComedianId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
-    
-    // ★修正: 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
     const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
     
     setIsScoreSubmitted(hasSubmittedScore);
@@ -314,6 +312,8 @@ export default function App() {
 
     if (!predictions[nameToCheck]) {
       setViewMode('PREDICTION');
+      // ★新規参加者（予想未提出）ならウェルカムモーダルを表示
+      setShowWelcomeModal(true);
     }
   };
 
@@ -410,6 +410,7 @@ export default function App() {
       });
       alert("予想を保存しました！");
       setIsPredictionSubmitted(true);
+      setShowWelcomeModal(false); // 予想保存したらモーダルはもう出さない
     } catch (error: any) {
       alert("保存失敗: " + error.message);
     } finally {
@@ -418,7 +419,6 @@ export default function App() {
   };
 
   const sendScore = async () => {
-    // ★修正: dataForRendering を使用して、管理者もユーザーも現在表示中のコンビIDを正しく取得
     const displayData = user?.isAdmin ? gameState : (localDisplay || gameState);
     if (!user || !displayData) return;
 
@@ -427,7 +427,6 @@ export default function App() {
       const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
       const current = safeComedians[displayData.currentComedianIndex] || safeComedians[0];
       
-      // IDがundefinedでないことを確認
       if (!current || current.id === undefined) {
           throw new Error("コンビデータが不正です");
       }
@@ -515,7 +514,6 @@ export default function App() {
 
     const newScore = Number(adminOfficialScore);
     
-    // ★修正: 得点確定時に forceSyncTimestamp も更新して参加者に即座に反映させる
     update(ref(db, `${DB_ROOT}/gameState`), {
       [`officialScores/${currentComedianId}`]: newScore,
       forceSyncTimestamp: Date.now()
@@ -617,7 +615,6 @@ export default function App() {
 
   // --- Helpers ---
   const dataForRendering = user?.isAdmin ? gameState : (localDisplay || gameState);
-  // ★修正: displayData が null の場合を考慮して安全にアクセス
   const displayData = dataForRendering || gameState; 
   
   const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
@@ -634,9 +631,7 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
-  // ★ソート機能を統合
   const ranking = useMemo(() => {
-    // ★安定化のためのガード節
     if (!displayData || !displayData.comedians) return [];
 
     const list = safeComedians.map(c => {
@@ -654,21 +649,18 @@ export default function App() {
         my: myScore,
         rawAvg: parseFloat(avg),
         official: officialScore,
-        isRevealed // 発表済みフラグ
+        isRevealed 
       };
     }).sort((a, b) => {
-        // 1. 発表済みを優先
         if (a.isRevealed !== b.isRevealed) {
             return a.isRevealed ? -1 : 1;
         }
-        // 2. プロ審査員得点でデフォルト降順 (発表済み同士の場合)
         return b.official - a.official;
     });
 
     const direction = sortDirection === 'asc' ? 1 : -1;
     
     return list.sort((a, b) => {
-      // 発表済み優先は常に維持
       if (a.isRevealed !== b.isRevealed) {
          return a.isRevealed ? -1 : 1;
       }
@@ -680,13 +672,13 @@ export default function App() {
         comparison = (a.rawAvg - b.rawAvg) * direction;
       } else if (sortBy === 'official') { 
         comparison = (a.official - b.official) * direction;
-      } else { // 'id'
+      } else { 
         comparison = (a.id - b.id) * direction;
       }
       return comparison;
     });
 
-  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData.officialScores, displayData.revealedStatus]);
+  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData?.officialScores, displayData?.revealedStatus]);
 
   const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
@@ -754,8 +746,7 @@ export default function App() {
     return (
       <div className="animate-fade-in space-y-6">
         <h2 className="text-2xl font-black text-white mb-4">ユーザー管理</h2>
-
-        {/* 登録ユーザーリスト (永続) */}
+        {/* (ユーザー管理のレンダリング内容は変更なし) */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
           <h3 className="font-bold text-lg text-indigo-400 mb-3 flex items-center gap-2">
             登録ユーザー ({registeredUsers.length}人)
@@ -783,7 +774,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* ログイン中ユーザーリスト (セッションのみ) */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
           <h3 className="font-bold text-lg text-red-400 mb-3 flex items-center gap-2">
             ログイン中ユーザー ({loggedInUsers.length + registeredUsers.filter(u => u.isLoggedIn).length}人)
@@ -813,9 +803,9 @@ export default function App() {
   const renderScoreDetail = (comedianId: number) => {
     const comedian = safeComedians.find(c => c.id === comedianId);
     const cScores = scores[comedianId] || {};
-    const officialScore = displayData.officialScores[comedianId];
+    const officialScore = displayData?.officialScores[comedianId];
 
-    if (!comedian || !displayData.revealedStatus?.[comedianId]) {
+    if (!comedian || !displayData?.revealedStatus?.[comedianId]) {
       return (
         <div className="text-center py-10 text-slate-400 bg-slate-900 rounded-xl">
           このコンビの採点結果はまだ公開されていません。
@@ -1457,12 +1447,13 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* ★修正: プロ審査員得点を順位表に併記し、プロ審査員得点順で表示 */}
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300 whitespace-nowrap">
-                    <Trophy size={16}/> 現在の順位
+                    <Trophy size={16}/> 現在の順位 (プロ審査員得点順)
                   </div>
                   <div className="divide-y divide-slate-800">
-                    {ranking.filter(c => c.rawAvg > 0).map((c, i) => (
+                    {ranking.map((c, i) => (
                       <div key={c.id} className={`flex items-center justify-between p-3 ${c.id===currentComedian.id ? 'bg-yellow-500/5' : ''}`}>
                         <div className="flex items-center gap-3 w-3/5">
                           <span className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold 
@@ -1752,6 +1743,68 @@ export default function App() {
                 </button>
             </div>
             <button onClick={() => setShowResetModal(false)} className="w-full py-2 bg-slate-700 rounded text-slate-400 mt-4 whitespace-nowrap">キャンセル</button>
+          </div>
+        </div>
+      )}
+
+      {/* ★ウェルカムモーダル */}
+      {showWelcomeModal && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-slate-900 w-full max-w-md rounded-xl border border-yellow-600/50 shadow-2xl p-6 relative overflow-y-auto max-h-[90vh]">
+            <div className="text-center mb-6">
+              <Sparkles className="w-12 h-12 text-yellow-500 mx-auto mb-2 animate-pulse" />
+              <h2 className="text-2xl font-black text-white">M-1 VOTINGへようこそ！</h2>
+              <p className="text-slate-400 text-xs">一緒に大会を盛り上げよう！</p>
+            </div>
+
+            <div className="space-y-6">
+              <div className="flex gap-4">
+                <div className="bg-blue-900/50 p-3 rounded-lg h-fit">
+                  <Crown className="text-blue-400" size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-lg mb-1">1. 3連単予想をしよう！</h3>
+                  <p className="text-sm text-slate-300 leading-relaxed">
+                    このページであなたの思う優勝〜3位までのコンビを選択してください。
+                    <br/>
+                    右上のメニューを押すと<span className="text-blue-400 font-bold">みんなの予想</span>が見れます。
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-4">
+                <div className="bg-red-900/50 p-3 rounded-lg h-fit">
+                  <Mic className="text-red-400" size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-lg mb-1">2. 当日はリアルタイム採点！</h3>
+                  <p className="text-sm text-slate-300 leading-relaxed">
+                    ネタが終わった後に個人で採点する時間を設けます。
+                    <br/>
+                    全員の採点を見ながら誰が決勝に進むのかドキドキを楽しもう！
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-4">
+                <div className="bg-yellow-900/50 p-3 rounded-lg h-fit">
+                  <Trophy className="text-yellow-400" size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-lg mb-1">3. 最終決戦もみんなで投票！</h3>
+                  <p className="text-sm text-slate-300 leading-relaxed">
+                    最後の3組に残った中から、あなたが一番面白かったコンビに投票しよう！
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <button 
+              onClick={() => setShowWelcomeModal(false)}
+              className="mt-8 w-full bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-black font-black py-4 rounded-xl text-lg shadow-lg transform transition active:scale-95"
+            >
+              さっそく始める！
+            </button>
           </div>
         </div>
       )}
