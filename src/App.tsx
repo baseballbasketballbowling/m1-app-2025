@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.29 (Score Submit & Rank UI Fix)";
+const APP_VERSION = "v3.30 (Stability Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -216,12 +216,13 @@ export default function App() {
   useEffect(() => {
     if (!localDisplay || !user) return;
     
-    // ★修正: コンビIDが変わったら、そのコンビの点数をチェックし、提出済み状態を更新
     const currentComedianId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
+    
+    // ★修正: 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
     const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
     
     setIsScoreSubmitted(hasSubmittedScore);
-    setMyScore(scores[currentComedianId]?.[user.name] || 85); // 既存の点数か85をセット
+    setMyScore(scores[currentComedianId]?.[user.name] || 85); 
     
     
     if (user?.isAdmin) {
@@ -229,7 +230,7 @@ export default function App() {
         setAdminOfficialScore(String(localDisplay.officialScores[currentComedianId] || ''));
       }
     }
-  }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); // scoresを依存に追加
+  }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); 
 
   useEffect(() => {
     if (user && predictions[user.name]) {
@@ -624,7 +625,6 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
-  // ★ソート機能を統合
   const ranking = useMemo(() => {
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
@@ -674,7 +674,6 @@ export default function App() {
 
   }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData.officialScores, displayData.revealedStatus]);
 
-  // ★採点一覧のソートヘッダーをトグル ('rank' -> 'official')
   const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
       setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
@@ -785,6 +784,7 @@ export default function App() {
                   <button 
                     onClick={() => adminForceLogout(u.name)}
                     className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-slate-700 transition whitespace-nowrap text-xs"
+                    title="強制ログアウト（セッション削除）"
                   >
                     <UserX size={16} className="inline mr-1"/> 強制ログアウト
                   </button>
