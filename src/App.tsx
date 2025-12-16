@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.32 (Final Stability Fix 2)";
+const APP_VERSION = "v3.28 (Official Score Sync Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -83,8 +83,8 @@ export default function App() {
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
-  // ★修正: ローカルで管理
-  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
@@ -214,23 +214,17 @@ export default function App() {
 
   // 5. データ反映系
   useEffect(() => {
-    if (!localDisplay || !user) return;
-    
-    const currentComedianId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
-    
-    // ★修正: 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
-    const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
-    
-    setIsScoreSubmitted(hasSubmittedScore);
-    setMyScore(scores[currentComedianId]?.[user.name] || 85); 
-    
+    if (!localDisplay) return;
+    setMyScore(85);
+    setIsScoreSubmitted(false);
     
     if (user?.isAdmin) {
-      if (currentComedianId) {
-        setAdminOfficialScore(String(localDisplay.officialScores[currentComedianId] || ''));
+      const currentId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
+      if (currentId) {
+        setAdminOfficialScore(String(localDisplay.officialScores[currentId] || ''));
       }
     }
-  }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); 
+  }, [localDisplay?.currentComedianIndex, user?.isAdmin]);
 
   useEffect(() => {
     if (user && predictions[user.name]) {
@@ -609,8 +603,7 @@ export default function App() {
 
   // --- Helpers ---
   const dataForRendering = user?.isAdmin ? gameState : (localDisplay || gameState);
-  // ★修正: displayData が null の場合を考慮して安全にアクセス
-  const displayData = dataForRendering || gameState;
+  const displayData = dataForRendering; 
   
   const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
   const safeFinalists = Array.isArray(displayData.finalists) ? displayData.finalists : [];
@@ -626,16 +619,13 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
+  // ★ソート機能を統合
   const ranking = useMemo(() => {
-    // ★修正: displayData が null の場合、空のリストを返す
-    if (!displayData || !displayData.comedians) return [];
-
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
-      
       const officialScore = displayData.officialScores[c.id] || 0;
       const isRevealed = displayData.revealedStatus?.[c.id] || false;
 
@@ -677,8 +667,9 @@ export default function App() {
       return comparison;
     });
 
-  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData?.officialScores, displayData?.revealedStatus]);
+  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData.officialScores, displayData.revealedStatus]);
 
+  // ★採点一覧のソートヘッダーをトグル ('rank' -> 'official')
   const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
       setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
@@ -789,7 +780,6 @@ export default function App() {
                   <button 
                     onClick={() => adminForceLogout(u.name)}
                     className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-slate-700 transition whitespace-nowrap text-xs"
-                    title="強制ログアウト（セッション削除）"
                   >
                     <UserX size={16} className="inline mr-1"/> 強制ログアウト
                   </button>
@@ -804,10 +794,9 @@ export default function App() {
   const renderScoreDetail = (comedianId: number) => {
     const comedian = safeComedians.find(c => c.id === comedianId);
     const cScores = scores[comedianId] || {};
-    // ★修正: displayData?.officialScores を安全に参照
-    const officialScore = displayData?.officialScores[comedianId];
+    const officialScore = displayData.officialScores[comedianId];
 
-    if (!comedian || !displayData?.revealedStatus?.[comedianId]) {
+    if (!comedian || !displayData.revealedStatus?.[comedianId]) {
       return (
         <div className="text-center py-10 text-slate-400 bg-slate-900 rounded-xl">
           このコンビの採点結果はまだ公開されていません。
@@ -1162,7 +1151,7 @@ export default function App() {
                       </th>
                       <th 
                         className="p-3 text-center cursor-pointer hover:text-white transition-colors text-xs sm:text-sm whitespace-nowrap"
-                        onClick={() => handleSort('official')} 
+                        onClick={() => handleSort('official')} // ★修正: キーを'rank'から'official'へ
                       >
                         プロ審査員
                       </th>
@@ -1449,25 +1438,21 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* ★修正: プロ審査員得点を順位表に併記し、プロ審査員得点順で表示 */}
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300 whitespace-nowrap">
-                    <Trophy size={16}/> 現在の順位 (プロ審査員得点順)
+                    <Trophy size={16}/> 現在の順位
                   </div>
                   <div className="divide-y divide-slate-800">
-                    {ranking.map((c, i) => (
+                    {ranking.filter(c => c.rawAvg > 0).map((c, i) => (
                       <div key={c.id} className={`flex items-center justify-between p-3 ${c.id===currentComedian.id ? 'bg-yellow-500/5' : ''}`}>
-                        <div className="flex items-center gap-3 w-3/5">
+                        <div className="flex items-center gap-3">
                           <span className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold 
                             ${i===0 ? 'bg-yellow-500 text-black' : i===1 ? 'bg-slate-400 text-black' : i===2 ? 'bg-amber-700 text-white' : 'bg-slate-800 text-slate-500'}`}>
                             {i+1}
                           </span>
                           <span className="font-bold text-sm whitespace-nowrap">{c.name}</span>
                         </div>
-                        <div className="flex gap-4 justify-end text-sm w-2/5">
-                           <span className="text-yellow-500 font-bold whitespace-nowrap">{c.avg}</span>
-                           <span className="text-red-400 font-bold whitespace-nowrap">{c.official || '-'}</span>
-                        </div>
+                        <span className="font-bold text-yellow-500">{ranking.find(r => r.id === c.id)?.avg}</span>
                       </div>
                     ))}
                   </div>
