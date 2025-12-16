@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.30 (Stability Fix)";
+const APP_VERSION = "v3.31 (Final Stability Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -631,8 +631,9 @@ export default function App() {
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
-      const officialScore = displayData.officialScores[c.id] || 0;
-      const isRevealed = displayData.revealedStatus?.[c.id] || false;
+      // ★修正: officialScore の参照を displayData 経由で行う
+      const officialScore = displayData?.officialScores[c.id] || 0;
+      const isRevealed = displayData?.revealedStatus?.[c.id] || false;
 
       return { 
         ...c, 
@@ -672,7 +673,7 @@ export default function App() {
       return comparison;
     });
 
-  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData.officialScores, displayData.revealedStatus]);
+  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData?.officialScores, displayData?.revealedStatus]);
 
   const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
@@ -799,9 +800,10 @@ export default function App() {
   const renderScoreDetail = (comedianId: number) => {
     const comedian = safeComedians.find(c => c.id === comedianId);
     const cScores = scores[comedianId] || {};
-    const officialScore = displayData.officialScores[comedianId];
+    // ★修正: displayData?.officialScores を安全に参照
+    const officialScore = displayData?.officialScores[comedianId];
 
-    if (!comedian || !displayData.revealedStatus?.[comedianId]) {
+    if (!comedian || !displayData?.revealedStatus?.[comedianId]) {
       return (
         <div className="text-center py-10 text-slate-400 bg-slate-900 rounded-xl">
           このコンビの採点結果はまだ公開されていません。
@@ -1156,7 +1158,7 @@ export default function App() {
                       </th>
                       <th 
                         className="p-3 text-center cursor-pointer hover:text-white transition-colors text-xs sm:text-sm whitespace-nowrap"
-                        onClick={() => handleSort('official')} // ★修正: キーを'rank'から'official'へ
+                        onClick={() => handleSort('official')} 
                       >
                         プロ審査員
                       </th>
