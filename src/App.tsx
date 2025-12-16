@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.27 (Live Status & Sort Fix)";
+const APP_VERSION = "v3.28 (Official Score Sync Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -88,7 +88,7 @@ export default function App() {
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
-  // 採点一覧ソート用 ('official' を追加)
+  // 採点一覧ソート用
   const [sortBy, setSortBy] = useState<'id' | 'my' | 'avg' | 'official'>('official');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
@@ -203,6 +203,7 @@ export default function App() {
   // ★4. 強制ログアウトコマンド監視
   useEffect(() => {
     if (user?.name && logoutCommands[user.name]) {
+      console.log(`[LOGOUT COMMAND] Received command for user: ${user.name}`);
       localStorage.removeItem('m1_user_v2');
       remove(ref(db, `${DB_ROOT}/userLogoutCommands/${user.name}`));
       setUser(null);
@@ -403,12 +404,19 @@ export default function App() {
   };
 
   const sendScore = async () => {
-    if (!user || !localDisplay) return;
+    // ★修正: dataForRendering を使用して、管理者もユーザーも現在表示中のコンビIDを正しく取得
+    const displayData = user?.isAdmin ? gameState : (localDisplay || gameState);
+    if (!user || !displayData) return;
+
     setIsSubmitting(true);
     try {
-      const displayData = localDisplay || gameState;
       const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
       const current = safeComedians[displayData.currentComedianIndex] || safeComedians[0];
+      
+      // IDがundefinedでないことを確認
+      if (!current || current.id === undefined) {
+          throw new Error("コンビデータが不正です");
+      }
       
       await set(ref(db, `${DB_ROOT}/scores/${current.id}/${user.name}`), myScore);
       setIsScoreSubmitted(true);
@@ -493,13 +501,13 @@ export default function App() {
 
     const newScore = Number(adminOfficialScore);
     
-    updateGameState({ 
-      officialScores: {
-        ...gameState.officialScores,
-        [currentComedianId]: newScore
-      }
+    // ★修正: 得点確定時に forceSyncTimestamp も更新して参加者に即座に反映させる
+    update(ref(db, `${DB_ROOT}/gameState`), {
+      [`officialScores/${currentComedianId}`]: newScore,
+      forceSyncTimestamp: Date.now()
     });
-    alert(`プロ審査員得点 (${newScore}点) を保存しました。`);
+    
+    alert(`プロ審査員得点 (${newScore}点) を保存し、参加者に公開しました。`);
   };
 
   const adminDeleteUser = async (name: string) => {
@@ -611,9 +619,7 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
-  // ★修正: ランキングのソートロジック
-  // 1. revealedStatus[id] が true のコンビを優先
-  // 2. sortBy で指定されたキーでソート (デフォルトは official 降順)
+  // ★ソート機能を統合
   const ranking = useMemo(() => {
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
@@ -730,7 +736,8 @@ export default function App() {
     return (
       <div className="animate-fade-in space-y-6">
         <h2 className="text-2xl font-black text-white mb-4">ユーザー管理</h2>
-        {/* (ユーザー管理のレンダリング内容は変更なし) */}
+
+        {/* 登録ユーザーリスト (永続) */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
           <h3 className="font-bold text-lg text-indigo-400 mb-3 flex items-center gap-2">
             登録ユーザー ({registeredUsers.length}人)
@@ -758,6 +765,7 @@ export default function App() {
           </div>
         </div>
 
+        {/* ログイン中ユーザーリスト (セッションのみ) */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
           <h3 className="font-bold text-lg text-red-400 mb-3 flex items-center gap-2">
             ログイン中ユーザー ({loggedInUsers.length + registeredUsers.filter(u => u.isLoggedIn).length}人)
