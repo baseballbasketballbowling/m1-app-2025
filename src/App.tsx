@@ -5,13 +5,13 @@ import {
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
   CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
-  Menu, X, LayoutDashboard, Radio, ClipboardList, Vote, UserMinus, UserX
+  Menu, X, LayoutDashboard, Radio, ClipboardList, Vote, UserMinus, UserX, UserCog
 } from 'lucide-react';
 
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.17 (Separate Score/Prediction Reset)";
+const APP_VERSION = "v3.19 (Nickname Change Added)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -95,7 +95,7 @@ export default function App() {
   const [selectedVoteId, setSelectedVoteId] = useState<number | null>(null);
   const [isVoteSubmitted, setIsVoteSubmitted] = useState(false);
   const [showFinalistModal, setShowFinalistModal] = useState(false); 
-  const [showResetModal, setShowResetModal] = useState(false); // ★追加：リセットモーダル
+  const [showResetModal, setShowResetModal] = useState(false);
   const [tempFinalists, setTempFinalists] = useState<number[]>([]); 
   const [adminOfficialScore, setAdminOfficialScore] = useState<string>('');
 
@@ -105,6 +105,10 @@ export default function App() {
 
   // コンビ詳細ページ表示用
   const [detailComedianId, setDetailComedianId] = useState<number | null>(null); 
+
+  // ★ニックネーム変更用
+  const [showNicknameModal, setShowNicknameModal] = useState(false);
+  const [newNickname, setNewNickname] = useState("");
   
   // 最後に処理した同期命令の時刻
   const lastSyncTimestamp = useRef(0);
@@ -306,6 +310,11 @@ export default function App() {
 
     setUser(userData);
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
+
+    // ★追加: 予想が未提出なら、ログイン直後に予想画面へ誘導する
+    if (!predictions[nameToCheck]) {
+      setViewMode('PREDICTION');
+    }
   };
 
   const handleLogout = () => {
@@ -321,6 +330,79 @@ export default function App() {
       setAdminPassword("");
       setIsAdminLogin(false);
       setIsMenuOpen(false);
+    }
+  };
+
+  // ★ニックネーム変更処理
+  const handleNicknameChange = async () => {
+    if (!user) return;
+    if (!newNickname.trim()) return;
+    if (/[.#$[\]]/.test(newNickname)) {
+        alert("名前に . # $ [ ] は使えません");
+        return;
+    }
+    if (newNickname === user.name) {
+        setShowNicknameModal(false);
+        return;
+    }
+
+    // 重複チェック
+    const snapshotAuth = await get(child(ref(db), `${DB_ROOT}/auth/${newNickname}`));
+    const snapshotUser = await get(child(ref(db), `${DB_ROOT}/users/${newNickname}`));
+    if (snapshotAuth.exists() || snapshotUser.exists()) {
+        alert("その名前は既に使用されています");
+        return;
+    }
+
+    if (!confirm(`ニックネームを「${user.name}」から「${newNickname}」に変更しますか？\n過去のデータ（予想、採点、投票）は全て引き継がれます。`)) return;
+
+    const oldName = user.name;
+    const root = DB_ROOT;
+    const updates: Record<string, any> = {};
+
+    // 1. Auth & Users (移行)
+    updates[`${root}/auth/${newNickname}`] = allAuthUsers[oldName];
+    updates[`${root}/auth/${oldName}`] = null;
+    updates[`${root}/users/${newNickname}`] = activeSessionUsers[oldName];
+    updates[`${root}/users/${oldName}`] = null;
+
+    // 2. Predictions (移行)
+    if (predictions[oldName]) {
+        updates[`${root}/predictions/${newNickname}`] = { ...predictions[oldName], name: newNickname };
+        updates[`${root}/predictions/${oldName}`] = null;
+    }
+
+    // 3. Final Votes (移行)
+    if (finalVotes[oldName]) {
+        updates[`${root}/finalVotes/${newNickname}`] = finalVotes[oldName];
+        updates[`${root}/finalVotes/${oldName}`] = null;
+    }
+
+    // 4. Scores (移行 - 全コンビ分ループ)
+    Object.keys(scores).forEach(comedianId => {
+        if (scores[comedianId] && scores[comedianId][oldName] !== undefined) {
+            updates[`${root}/scores/${comedianId}/${newNickname}`] = scores[comedianId][oldName];
+            updates[`${root}/scores/${comedianId}/${oldName}`] = null;
+        }
+    });
+
+    try {
+        await update(ref(db), updates);
+        
+        // ローカル更新
+        const newUser = { ...user, name: newNickname };
+        setUser(newUser);
+        setLoginName(newNickname); 
+        localStorage.setItem('m1_user_v2', JSON.stringify(newUser));
+        
+        alert("ニックネームを変更しました！");
+        setShowNicknameModal(false);
+        setNewNickname("");
+        setIsMenuOpen(false);
+
+    } catch(e: any) {
+        console.error(e);
+        alert("変更に失敗しました: " + e.message);
     }
   };
 
@@ -857,7 +939,13 @@ export default function App() {
                       </button>
                     </>
                   )}
-
+                  
+                  <button 
+                      onClick={() => { setShowNicknameModal(true); setIsMenuOpen(false); }}
+                      className="w-full text-left px-3 py-2 text-sm text-blue-400 hover:bg-slate-700 rounded flex items-center gap-2"
+                  >
+                      <UserCog size={16}/> ニックネーム変更
+                  </button>
 
                   <div className="border-t border-slate-700/50 my-2"></div>
 
@@ -1474,6 +1562,30 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ★ニックネーム変更モーダル */}
+      {showNicknameModal && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-slate-900 w-full max-w-sm rounded-xl border border-slate-700 p-6 space-y-4">
+            <h3 className="text-xl font-bold text-white text-center">ニックネーム変更</h3>
+            <p className="text-sm text-slate-400 text-center">新しいニックネームを入力してください。<br/>過去のデータは引き継がれます。</p>
+            
+            <input 
+              type="text" 
+              value={newNickname}
+              onChange={e => setNewNickname(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded p-3 text-white focus:ring-2 focus:ring-yellow-500 outline-none"
+              placeholder="新しいニックネーム"
+            />
+            
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => { setShowNicknameModal(false); setNewNickname(""); }} className="flex-1 py-2 bg-slate-800 rounded text-slate-400">キャンセル</button>
+              <button onClick={handleNicknameChange} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded">変更する</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
