@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.31 (Final Stability Fix)";
+const APP_VERSION = "v3.32 (Final Stability Fix 2)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -609,7 +609,8 @@ export default function App() {
 
   // --- Helpers ---
   const dataForRendering = user?.isAdmin ? gameState : (localDisplay || gameState);
-  const displayData = dataForRendering; 
+  // ★修正: displayData が null の場合を考慮して安全にアクセス
+  const displayData = dataForRendering || gameState;
   
   const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
   const safeFinalists = Array.isArray(displayData.finalists) ? displayData.finalists : [];
@@ -626,14 +627,17 @@ export default function App() {
   };
 
   const ranking = useMemo(() => {
+    // ★修正: displayData が null の場合、空のリストを返す
+    if (!displayData || !displayData.comedians) return [];
+
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
-      // ★修正: officialScore の参照を displayData 経由で行う
-      const officialScore = displayData?.officialScores[c.id] || 0;
-      const isRevealed = displayData?.revealedStatus?.[c.id] || false;
+      
+      const officialScore = displayData.officialScores[c.id] || 0;
+      const isRevealed = displayData.revealedStatus?.[c.id] || false;
 
       return { 
         ...c, 
