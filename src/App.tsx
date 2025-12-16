@@ -6,13 +6,13 @@ import {
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
   CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
   Menu, X, LayoutDashboard, Radio, ClipboardList, Vote, UserMinus, UserX, UserCog,
-  TrendingUp, Award
+  TrendingUp, Award, Sparkles
 } from 'lucide-react';
 
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.28 (Official Score Sync Fix)";
+const APP_VERSION = "v3.35 (Welcome Modal Logic Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -83,8 +83,8 @@ export default function App() {
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
+  // ★修正: ローカルで管理
+  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
@@ -215,7 +215,12 @@ export default function App() {
 
   // 5. データ反映系
   useEffect(() => {
-    if (!localDisplay || !user) return;
+    if (!localDisplay || !user) {
+        setIsScoreSubmitted(false);
+        setMyScore(85);
+        if (user?.isAdmin) setAdminOfficialScore('');
+        return;
+    }
     
     const currentComedianId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
     
@@ -304,9 +309,15 @@ export default function App() {
     setUser(userData);
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
 
-    if (!predictions[nameToCheck]) {
-      setViewMode('PREDICTION');
-      setShowWelcomeModal(true);
+    // ★修正: サーバーから直接予想データの有無を確認してモーダル制御
+    try {
+      const predSnap = await get(child(ref(db), `${DB_ROOT}/predictions/${nameToCheck}`));
+      if (!predSnap.exists()) {
+        setViewMode('PREDICTION');
+        setShowWelcomeModal(true);
+      }
+    } catch(e) {
+      console.error("Fetch prediction failed", e);
     }
   };
 
@@ -625,9 +636,7 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
-  // ★ソート機能を統合
   const ranking = useMemo(() => {
-    // 安定化のためのガード節
     if (!displayData || !displayData.comedians) return [];
 
     const list = safeComedians.map(c => {
@@ -636,8 +645,8 @@ export default function App() {
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
       
-      const officialScore = displayData.officialScores[c.id] || 0;
-      const isRevealed = displayData.revealedStatus?.[c.id] || false;
+      const officialScore = displayData.officialScores ? (displayData.officialScores[c.id] || 0) : 0;
+      const isRevealed = displayData.revealedStatus ? (displayData.revealedStatus[c.id] || false) : false;
 
       return { 
         ...c, 
@@ -645,21 +654,18 @@ export default function App() {
         my: myScore,
         rawAvg: parseFloat(avg),
         official: officialScore,
-        isRevealed // 発表済みフラグ
+        isRevealed 
       };
     }).sort((a, b) => {
-        // 1. 発表済みを優先
         if (a.isRevealed !== b.isRevealed) {
             return a.isRevealed ? -1 : 1;
         }
-        // 2. プロ審査員得点でデフォルト降順 (発表済み同士の場合)
         return b.official - a.official;
     });
 
     const direction = sortDirection === 'asc' ? 1 : -1;
     
     return list.sort((a, b) => {
-      // 発表済み優先は常に維持
       if (a.isRevealed !== b.isRevealed) {
          return a.isRevealed ? -1 : 1;
       }
@@ -669,15 +675,15 @@ export default function App() {
         comparison = (a.my - b.my) * direction;
       } else if (sortBy === 'avg') {
         comparison = (a.rawAvg - b.rawAvg) * direction;
-      } else if (sortBy === 'official') { // ★プロ審査員得点
+      } else if (sortBy === 'official') { 
         comparison = (a.official - b.official) * direction;
-      } else { // 'id'
+      } else { 
         comparison = (a.id - b.id) * direction;
       }
       return comparison;
     });
 
-  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData?.officialScores, displayData?.revealedStatus]);
+  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData]);
 
   const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
@@ -805,7 +811,7 @@ export default function App() {
     const comedian = safeComedians.find(c => c.id === comedianId);
     const cScores = scores[comedianId] || {};
     // ★修正: displayData?.officialScores を安全に参照
-    const officialScore = displayData?.officialScores[comedianId];
+    const officialScore = displayData?.officialScores ? displayData.officialScores[comedianId] : undefined;
 
     if (!comedian || !displayData?.revealedStatus?.[comedianId]) {
       return (
@@ -1091,19 +1097,8 @@ export default function App() {
               <div className="animate-fade-in space-y-6">
                 <h3 className="text-xl font-bold text-white mb-4 whitespace-nowrap">結果公開済みのコンビ</h3>
                 <div className="grid gap-3">
-                  {/* ★修正: 採点済み（結果オープン済み）のコンビを優先的に表示。さらにプロ審査員得点があればそれでソート */}
-                  {safeComedians
-                    .slice() // コピー
-                    .sort((a, b) => {
-                      const revealedA = displayData.revealedStatus?.[a.id] ? 1 : 0;
-                      const revealedB = displayData.revealedStatus?.[b.id] ? 1 : 0;
-                      if (revealedA !== revealedB) return revealedB - revealedA; // オープン済みが先
-
-                      const scoreA = displayData.officialScores[a.id] || 0;
-                      const scoreB = displayData.officialScores[b.id] || 0;
-                      return scoreB - scoreA; // プロ審査員得点の降順
-                    })
-                    .map(c => {
+                  {safeComedians.map(c => {
+                    // コンビが現在採点中または過去にオープン済みであれば選択可能
                     const isRevealed = displayData.revealedStatus?.[c.id]; 
                     
                     return (
@@ -1172,7 +1167,7 @@ export default function App() {
                     {ranking.map((c, i) => { 
                       const isRevealed = displayData.revealedStatus?.[c.id];
                       const myScoreVal = scores[c.id]?.[user?.name || ''];
-                      const officialScore = displayData.officialScores[c.id];
+                      const officialScore = displayData.officialScores ? displayData.officialScores[c.id] : undefined;
 
                       return (
                         <tr key={c.id} className="hover:bg-slate-800/50">
@@ -1372,7 +1367,7 @@ export default function App() {
             </div>
 
             {/* プロ審査員得点の表示 (平均点の下に配置) */}
-            {displayData.officialScores[currentComedian.id] !== undefined && displayData.officialScores[currentComedian.id] !== null && (
+            {displayData.officialScores && displayData.officialScores[currentComedian.id] !== undefined && displayData.officialScores[currentComedian.id] !== null && (
                 <div className="text-center text-xl font-bold text-red-400 whitespace-nowrap">
                     プロ審査員得点: {displayData.officialScores[currentComedian.id]} 点
                 </div>
@@ -1449,6 +1444,7 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* ★修正: プロ審査員得点を順位表に併記し、プロ審査員得点順で表示 */}
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300 whitespace-nowrap">
                     <Trophy size={16}/> 現在の順位 (プロ審査員得点順)
@@ -1700,7 +1696,7 @@ export default function App() {
                     className={`p-3 rounded border cursor-pointer flex justify-between items-center
                       ${isSelected ? 'bg-yellow-900/30 border-yellow-500 text-yellow-500' : 'bg-slate-800 border-slate-700 text-slate-300'}`}
                   >
-                    <span className="whitespace-nowrap">{c.name}</span>
+                    <span>{c.name}</span>
                     {isSelected && <CheckCircle2 size={16}/>}
                   </div>
                 );
@@ -1744,29 +1740,6 @@ export default function App() {
                 </button>
             </div>
             <button onClick={() => setShowResetModal(false)} className="w-full py-2 bg-slate-700 rounded text-slate-400 mt-4 whitespace-nowrap">キャンセル</button>
-          </div>
-        </div>
-      )}
-
-      {/* ★ニックネーム変更モーダル */}
-      {showNicknameModal && (
-        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 w-full max-w-sm rounded-xl border border-slate-700 p-6 space-y-4">
-            <h3 className="text-xl font-bold text-white text-center whitespace-nowrap">ニックネーム変更</h3>
-            <p className="text-sm text-slate-400 text-center">新しいニックネームを入力してください。<br/>過去のデータは引き継がれます。</p>
-            
-            <input 
-              type="text" 
-              value={newNickname}
-              onChange={e => setNewNickname(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded p-3 text-white focus:ring-2 focus:ring-yellow-500 outline-none"
-              placeholder="新しいニックネーム"
-            />
-            
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => { setShowNicknameModal(false); setNewNickname(""); }} className="flex-1 py-2 bg-slate-800 rounded text-slate-400 whitespace-nowrap">キャンセル</button>
-              <button onClick={handleNicknameChange} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded whitespace-nowrap">変更する</button>
-            </div>
           </div>
         </div>
       )}
@@ -1829,6 +1802,29 @@ export default function App() {
             >
               さっそく始める！
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ★ニックネーム変更モーダル */}
+      {showNicknameModal && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-slate-900 w-full max-w-sm rounded-xl border border-slate-700 p-6 space-y-4">
+            <h3 className="text-xl font-bold text-white text-center whitespace-nowrap">ニックネーム変更</h3>
+            <p className="text-sm text-slate-400 text-center">新しいニックネームを入力してください。<br/>過去のデータは引き継がれます。</p>
+            
+            <input 
+              type="text" 
+              value={newNickname}
+              onChange={e => setNewNickname(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded p-3 text-white focus:ring-2 focus:ring-yellow-500 outline-none"
+              placeholder="新しいニックネーム"
+            />
+            
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => { setShowNicknameModal(false); setNewNickname(""); }} className="flex-1 py-2 bg-slate-800 rounded text-slate-400 whitespace-nowrap">キャンセル</button>
+              <button onClick={handleNicknameChange} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded whitespace-nowrap">変更する</button>
+            </div>
           </div>
         </div>
       )}
