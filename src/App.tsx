@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.28 (Official Score Sync Fix)";
+const APP_VERSION = "v3.33 (Score Fix & Rank UI Updated)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -84,7 +84,7 @@ export default function App() {
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
+  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
@@ -214,17 +214,31 @@ export default function App() {
 
   // 5. データ反映系
   useEffect(() => {
-    if (!localDisplay) return;
-    setMyScore(85);
-    setIsScoreSubmitted(false);
+    if (!localDisplay || !user) {
+        // ユーザーがまだ認証されていない場合やデータがない場合は、状態をリセット
+        setIsScoreSubmitted(false);
+        setMyScore(85);
+        if (user?.isAdmin) {
+             setAdminOfficialScore('');
+        }
+        return;
+    }
+    
+    const currentComedianId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
+    
+    // ★修正: 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
+    const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
+    
+    setIsScoreSubmitted(hasSubmittedScore);
+    setMyScore(scores[currentComedianId]?.[user.name] || 85); 
+    
     
     if (user?.isAdmin) {
-      const currentId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
-      if (currentId) {
-        setAdminOfficialScore(String(localDisplay.officialScores[currentId] || ''));
+      if (currentComedianId) {
+        setAdminOfficialScore(String(localDisplay.officialScores[currentComedianId] || ''));
       }
     }
-  }, [localDisplay?.currentComedianIndex, user?.isAdmin]);
+  }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); 
 
   useEffect(() => {
     if (user && predictions[user.name]) {
@@ -603,7 +617,8 @@ export default function App() {
 
   // --- Helpers ---
   const dataForRendering = user?.isAdmin ? gameState : (localDisplay || gameState);
-  const displayData = dataForRendering; 
+  // ★修正: displayData が null の場合を考慮して安全にアクセス
+  const displayData = dataForRendering || gameState; 
   
   const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
   const safeFinalists = Array.isArray(displayData.finalists) ? displayData.finalists : [];
@@ -621,11 +636,15 @@ export default function App() {
 
   // ★ソート機能を統合
   const ranking = useMemo(() => {
+    // ★安定化のためのガード節
+    if (!displayData || !displayData.comedians) return [];
+
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
+      
       const officialScore = displayData.officialScores[c.id] || 0;
       const isRevealed = displayData.revealedStatus?.[c.id] || false;
 
@@ -659,7 +678,7 @@ export default function App() {
         comparison = (a.my - b.my) * direction;
       } else if (sortBy === 'avg') {
         comparison = (a.rawAvg - b.rawAvg) * direction;
-      } else if (sortBy === 'official') { // ★プロ審査員得点
+      } else if (sortBy === 'official') { 
         comparison = (a.official - b.official) * direction;
       } else { // 'id'
         comparison = (a.id - b.id) * direction;
@@ -669,7 +688,6 @@ export default function App() {
 
   }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData.officialScores, displayData.revealedStatus]);
 
-  // ★採点一覧のソートヘッダーをトグル ('rank' -> 'official')
   const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
       setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
@@ -780,6 +798,7 @@ export default function App() {
                   <button 
                     onClick={() => adminForceLogout(u.name)}
                     className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-slate-700 transition whitespace-nowrap text-xs"
+                    title="強制ログアウト（セッション削除）"
                   >
                     <UserX size={16} className="inline mr-1"/> 強制ログアウト
                   </button>
@@ -1151,7 +1170,7 @@ export default function App() {
                       </th>
                       <th 
                         className="p-3 text-center cursor-pointer hover:text-white transition-colors text-xs sm:text-sm whitespace-nowrap"
-                        onClick={() => handleSort('official')} // ★修正: キーを'rank'から'official'へ
+                        onClick={() => handleSort('official')} 
                       >
                         プロ審査員
                       </th>
@@ -1445,14 +1464,17 @@ export default function App() {
                   <div className="divide-y divide-slate-800">
                     {ranking.filter(c => c.rawAvg > 0).map((c, i) => (
                       <div key={c.id} className={`flex items-center justify-between p-3 ${c.id===currentComedian.id ? 'bg-yellow-500/5' : ''}`}>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 w-3/5">
                           <span className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold 
                             ${i===0 ? 'bg-yellow-500 text-black' : i===1 ? 'bg-slate-400 text-black' : i===2 ? 'bg-amber-700 text-white' : 'bg-slate-800 text-slate-500'}`}>
                             {i+1}
                           </span>
                           <span className="font-bold text-sm whitespace-nowrap">{c.name}</span>
                         </div>
-                        <span className="font-bold text-yellow-500">{ranking.find(r => r.id === c.id)?.avg}</span>
+                        <div className="flex gap-4 justify-end text-sm w-2/5">
+                           <span className="text-yellow-500 font-bold whitespace-nowrap">{c.avg}</span>
+                           <span className="text-red-400 font-bold whitespace-nowrap">{c.official || '-'}</span>
+                        </div>
                       </div>
                     ))}
                   </div>
