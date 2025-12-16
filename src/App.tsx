@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.26 (Login Msg Layout Fix)";
+const APP_VERSION = "v3.27 (Live Status & Sort Fix)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -88,9 +88,9 @@ export default function App() {
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
-  // 採点一覧ソート用
-  const [sortBy, setSortBy] = useState<'id' | 'my' | 'avg' | 'rank'>('id');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  // 採点一覧ソート用 ('official' を追加)
+  const [sortBy, setSortBy] = useState<'id' | 'my' | 'avg' | 'official'>('official');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   // 最終決戦用
   const [selectedVoteId, setSelectedVoteId] = useState<number | null>(null);
@@ -203,7 +203,6 @@ export default function App() {
   // ★4. 強制ログアウトコマンド監視
   useEffect(() => {
     if (user?.name && logoutCommands[user.name]) {
-      console.log(`[LOGOUT COMMAND] Received command for user: ${user.name}`);
       localStorage.removeItem('m1_user_v2');
       remove(ref(db, `${DB_ROOT}/userLogoutCommands/${user.name}`));
       setUser(null);
@@ -612,42 +611,60 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
-  // ★ソート機能を統合
+  // ★修正: ランキングのソートロジック
+  // 1. revealedStatus[id] が true のコンビを優先
+  // 2. sortBy で指定されたキーでソート (デフォルトは official 降順)
   const ranking = useMemo(() => {
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
-      
+      const officialScore = displayData.officialScores[c.id] || 0;
+      const isRevealed = displayData.revealedStatus?.[c.id] || false;
+
       return { 
         ...c, 
         avg: parseFloat(avg), 
         my: myScore,
-        rawAvg: parseFloat(avg) 
+        rawAvg: parseFloat(avg),
+        official: officialScore,
+        isRevealed // 発表済みフラグ
       };
-    }).sort((a, b) => b.rawAvg - a.rawAvg);
+    }).sort((a, b) => {
+        // 1. 発表済みを優先
+        if (a.isRevealed !== b.isRevealed) {
+            return a.isRevealed ? -1 : 1;
+        }
+        // 2. プロ審査員得点でデフォルト降順 (発表済み同士の場合)
+        return b.official - a.official;
+    });
 
     const direction = sortDirection === 'asc' ? 1 : -1;
     
     return list.sort((a, b) => {
+      // 発表済み優先は常に維持
+      if (a.isRevealed !== b.isRevealed) {
+         return a.isRevealed ? -1 : 1;
+      }
+      
       let comparison = 0;
       if (sortBy === 'my') {
         comparison = (a.my - b.my) * direction;
       } else if (sortBy === 'avg') {
         comparison = (a.rawAvg - b.rawAvg) * direction;
-      } else { 
-        comparison = (a.rawAvg - b.rawAvg) * -1;
-        if (sortBy === 'id') {
-          comparison = (a.id - b.id) * direction;
-        }
+      } else if (sortBy === 'official') { // ★プロ審査員得点
+        comparison = (a.official - b.official) * direction;
+      } else { // 'id'
+        comparison = (a.id - b.id) * direction;
       }
       return comparison;
     });
 
-  }, [scores, safeComedians, user?.name, sortBy, sortDirection]);
+  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData.officialScores, displayData.revealedStatus]);
 
-  const handleSort = (key: 'id' | 'my' | 'avg' | 'rank') => {
+  // ★採点一覧のソートヘッダーをトグル ('rank' -> 'official')
+  const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
       setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
     } else {
@@ -713,8 +730,7 @@ export default function App() {
     return (
       <div className="animate-fade-in space-y-6">
         <h2 className="text-2xl font-black text-white mb-4">ユーザー管理</h2>
-
-        {/* 登録ユーザーリスト (永続) */}
+        {/* (ユーザー管理のレンダリング内容は変更なし) */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
           <h3 className="font-bold text-lg text-indigo-400 mb-3 flex items-center gap-2">
             登録ユーザー ({registeredUsers.length}人)
@@ -742,7 +758,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* ログイン中ユーザーリスト (セッションのみ) */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
           <h3 className="font-bold text-lg text-red-400 mb-3 flex items-center gap-2">
             ログイン中ユーザー ({loggedInUsers.length + registeredUsers.filter(u => u.isLoggedIn).length}人)
@@ -1057,8 +1072,19 @@ export default function App() {
               <div className="animate-fade-in space-y-6">
                 <h3 className="text-xl font-bold text-white mb-4 whitespace-nowrap">結果公開済みのコンビ</h3>
                 <div className="grid gap-3">
-                  {safeComedians.map(c => {
-                    // コンビが現在採点中または過去にオープン済みであれば選択可能
+                  {/* ★修正: 採点済み（結果オープン済み）のコンビを優先的に表示。さらにプロ審査員得点があればそれでソート */}
+                  {safeComedians
+                    .slice() // コピー
+                    .sort((a, b) => {
+                      const revealedA = displayData.revealedStatus?.[a.id] ? 1 : 0;
+                      const revealedB = displayData.revealedStatus?.[b.id] ? 1 : 0;
+                      if (revealedA !== revealedB) return revealedB - revealedA; // オープン済みが先
+
+                      const scoreA = displayData.officialScores[a.id] || 0;
+                      const scoreB = displayData.officialScores[b.id] || 0;
+                      return scoreB - scoreA; // プロ審査員得点の降順
+                    })
+                    .map(c => {
                     const isRevealed = displayData.revealedStatus?.[c.id]; 
                     
                     return (
@@ -1117,17 +1143,16 @@ export default function App() {
                       </th>
                       <th 
                         className="p-3 text-center cursor-pointer hover:text-white transition-colors text-xs sm:text-sm whitespace-nowrap"
-                        onClick={() => handleSort('rank')}
+                        onClick={() => handleSort('official')} // ★修正: キーを'rank'から'official'へ
                       >
                         プロ審査員
                       </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {ranking.map((c, i) => { // 既にソート済みリストを使用
+                    {ranking.map((c, i) => { 
                       const isRevealed = displayData.revealedStatus?.[c.id];
                       const myScoreVal = scores[c.id]?.[user?.name || ''];
-                      const rankData = ranking.find(r => r.id === c.id);
                       const officialScore = displayData.officialScores[c.id];
 
                       return (
@@ -1370,6 +1395,23 @@ export default function App() {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* ★修正: 採点中画面に提出済みメンバーを表示 */}
+            {!displayData.isScoreRevealed && displayData.phase === 'SCORING' && (
+               <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                  <h3 className="text-sm font-bold text-slate-400 mb-4 flex items-center gap-2 whitespace-nowrap">
+                     <Users size={16}/> 採点提出済みのメンバー
+                  </h3>
+                  <div className="flex flex-wrap gap-2">
+                     {Object.keys(scores[currentComedian.id] || {}).length === 0 && <span className="text-slate-600 text-sm whitespace-nowrap">まだ誰も提出していません</span>}
+                     {Object.keys(scores[currentComedian.id] || {}).map(name => (
+                        <span key={name} className="px-3 py-1 bg-slate-800 text-slate-200 rounded-full text-sm border border-slate-700 flex items-center gap-1 whitespace-nowrap">
+                           <CheckCircle2 size={12} className="text-green-500"/> {name}
+                        </span>
+                     ))}
+                  </div>
+               </div>
             )}
 
             {displayData.isScoreRevealed && (
