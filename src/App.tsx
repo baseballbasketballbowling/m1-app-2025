@@ -5,13 +5,14 @@ import {
   Trophy, Mic, Crown, Save, BarChart3, Settings, 
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
   CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
-  Menu, X, LayoutDashboard, Radio, ClipboardList, Vote, UserMinus, UserX, UserCog
+  Menu, X, LayoutDashboard, Radio, ClipboardList, Vote, UserMinus, UserX, UserCog,
+  TrendingUp, Award
 } from 'lucide-react';
 
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.19 (Nickname Change Added)";
+const APP_VERSION = "v3.21 (Prediction Stats)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -51,7 +52,7 @@ export default function App() {
   // --- User State ---
   const [user, setUser] = useState<{name: string, isAdmin: boolean} | null>(null);
   const [loginName, setLoginName] = useState("");
-  const [userPassword, setUserPassword] = useState(""); // ★追加：一般ユーザーのパスワード
+  const [userPassword, setUserPassword] = useState(""); 
   const [isAdminLogin, setIsAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
 
@@ -77,7 +78,7 @@ export default function App() {
   // ★ユーザー管理用データ
   const [allAuthUsers, setAllAuthUsers] = useState<Record<string, any>>({});
   const [activeSessionUsers, setActiveSessionUsers] = useState<Record<string, any>>({});
-  const [logoutCommands, setLogoutCommands] = useState<Record<string, any>>({}); // ★追加：ログアウト命令
+  const [logoutCommands, setLogoutCommands] = useState<Record<string, any>>({}); 
 
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
@@ -113,7 +114,7 @@ export default function App() {
   // 最後に処理した同期命令の時刻
   const lastSyncTimestamp = useRef(0);
 
-  // 1. ログイン復元（LocalStorageからユーザー情報をロード）
+  // 1. ログイン復元
   useEffect(() => {
     const saved = localStorage.getItem('m1_user_v2');
     if (saved) {
@@ -121,7 +122,7 @@ export default function App() {
     }
   }, []);
   
-  // 2. Firebase同期 (gameStateの受信)
+  // 2. Firebase同期
   useEffect(() => {
     const gameRef = ref(db, `${DB_ROOT}/gameState`);
     const scoresRef = ref(db, `${DB_ROOT}/scores`);
@@ -129,7 +130,7 @@ export default function App() {
     const votesRef = ref(db, `${DB_ROOT}/finalVotes`);
     const authRef = ref(db, `${DB_ROOT}/auth`);
     const usersRef = ref(db, `${DB_ROOT}/users`);
-    const logoutCommandRef = ref(db, `${DB_ROOT}/userLogoutCommands`); // ★追加
+    const logoutCommandRef = ref(db, `${DB_ROOT}/userLogoutCommands`); 
 
     const unsubGame = onValue(gameRef, (snap) => {
       const val = snap.val();
@@ -146,7 +147,7 @@ export default function App() {
         };
         setGameState(newGameState);
 
-        // 初回ロード時のみ localDisplay を設定（参加者フリーズの初期値）
+        // 初回ロード時のみ localDisplay を設定
         setLocalDisplay(prev => {
           if (prev === null) {
             lastSyncTimestamp.current = newGameState.forceSyncTimestamp;
@@ -171,8 +172,7 @@ export default function App() {
     
     const unsubAuth = onValue(authRef, (snap) => setAllAuthUsers(snap.val() || {}));
     const unsubUsers = onValue(usersRef, (snap) => setActiveSessionUsers(snap.val() || {}));
-    const unsubLogoutCommands = onValue(logoutCommandRef, (snap) => setLogoutCommands(snap.val() || {})); // ★追加
-
+    const unsubLogoutCommands = onValue(logoutCommandRef, (snap) => setLogoutCommands(snap.val() || {}));
 
     const unsubScores = onValue(scoresRef, (snap) => setScores(snap.val() || {}));
     const unsubPreds = onValue(predsRef, (snap) => setPredictions(snap.val() || {}));
@@ -185,7 +185,7 @@ export default function App() {
         unsubVotes(); 
         unsubAuth();
         unsubUsers();
-        unsubLogoutCommands(); // ★クリーンアップ
+        unsubLogoutCommands();
     };
   }, []);
 
@@ -200,28 +200,24 @@ export default function App() {
     }
   }, [gameState.forceSyncTimestamp, gameState]); 
 
-  // ★4. 強制ログアウトコマンド監視 (自分が対象の場合、Local Storageを破壊してログアウト)
+  // ★4. 強制ログアウトコマンド監視
   useEffect(() => {
     if (user?.name && logoutCommands[user.name]) {
       console.log(`[LOGOUT COMMAND] Received command for user: ${user.name}`);
-      // LocalStorageから認証情報を削除
       localStorage.removeItem('m1_user_v2');
-      // DBからコマンドを削除 (他のブラウザがこのコマンドを処理した場合でも安全に動作させるため)
       remove(ref(db, `${DB_ROOT}/userLogoutCommands/${user.name}`));
-      // 画面上のセッションをクリア
       setUser(null);
       alert(`管理者の操作により、強制的にログアウトされました。`);
     }
   }, [user?.name, logoutCommands]); 
 
 
-  // 5. データ反映系 (localDisplayが更新されたら自分の入力状態などをリセット)
+  // 5. データ反映系
   useEffect(() => {
     if (!localDisplay) return;
     setMyScore(85);
     setIsScoreSubmitted(false);
     
-    // ★管理者：コンビ切り替え時に合計点入力フォームを更新
     if (user?.isAdmin) {
       const currentId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
       if (currentId) {
@@ -248,7 +244,6 @@ export default function App() {
     e.preventDefault();
     if (!loginName.trim()) return;
 
-    // パスワードチェックは管理者/一般共通で必要
     if (!userPassword.trim() && !isAdminLogin) {
         alert("パスワードを入力してください。");
         return;
@@ -260,7 +255,6 @@ export default function App() {
     
     const nameToCheck = loginName.trim();
     
-    // ★認証情報の存在チェックと新規ユーザー判定
     const authSnapshot = await get(child(ref(db), `${DB_ROOT}/auth/${nameToCheck}`));
     const isNewUser = !authSnapshot.exists();
 
@@ -272,7 +266,7 @@ export default function App() {
       }
     }
 
-    // 2. ニックネームの重複チェック（現在使用中のセッション）
+    // 2. ニックネームの重複チェック
     const sessionSnapshot = await get(child(ref(db), `${DB_ROOT}/users/${nameToCheck}`));
     if (sessionSnapshot.exists()) {
         alert("その名前は既に他のセッションで使用されています。");
@@ -282,17 +276,14 @@ export default function App() {
     // 3. 一般ユーザーの認証または新規登録
     if (!isAdminLogin) {
         if (isNewUser) {
-            // 新規登録
             if (!confirm(`「${nameToCheck}」で新規ユーザー登録します。\nパスワード: ${userPassword} でよろしいですか？`)) {
                 return;
             }
-            // パスワードを平文で保存 (簡易認証のため)
             await set(ref(db, `${DB_ROOT}/auth/${nameToCheck}`), { 
                 password: userPassword.trim(),
                 isAdmin: false
             });
         } else {
-            // 既存ユーザーの認証
             if (authSnapshot.val()?.password !== userPassword.trim()) {
                 alert("パスワードが違います。");
                 return;
@@ -302,7 +293,6 @@ export default function App() {
     
     const userData = { name: nameToCheck, isAdmin: isAdminLogin };
     
-    // ユーザーセッション登録（ログイン中を示す）
     set(ref(db, `${DB_ROOT}/users/${nameToCheck}`), {
       joinedAt: Date.now(),
       isAdmin: isAdminLogin
@@ -311,7 +301,6 @@ export default function App() {
     setUser(userData);
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
 
-    // ★追加: 予想が未提出なら、ログイン直後に予想画面へ誘導する
     if (!predictions[nameToCheck]) {
       setViewMode('PREDICTION');
     }
@@ -319,7 +308,6 @@ export default function App() {
 
   const handleLogout = () => {
     if (confirm("ログアウトしますか？")) {
-      // ログアウト時にユーザーセッションをDBから削除
       if (user?.name) {
           remove(ref(db, `${DB_ROOT}/users/${user.name}`));
       }
@@ -333,7 +321,7 @@ export default function App() {
     }
   };
 
-  // ★ニックネーム変更処理
+  // ニックネーム変更処理
   const handleNicknameChange = async () => {
     if (!user) return;
     if (!newNickname.trim()) return;
@@ -346,7 +334,6 @@ export default function App() {
         return;
     }
 
-    // 重複チェック
     const snapshotAuth = await get(child(ref(db), `${DB_ROOT}/auth/${newNickname}`));
     const snapshotUser = await get(child(ref(db), `${DB_ROOT}/users/${newNickname}`));
     if (snapshotAuth.exists() || snapshotUser.exists()) {
@@ -360,25 +347,19 @@ export default function App() {
     const root = DB_ROOT;
     const updates: Record<string, any> = {};
 
-    // 1. Auth & Users (移行)
     updates[`${root}/auth/${newNickname}`] = allAuthUsers[oldName];
     updates[`${root}/auth/${oldName}`] = null;
     updates[`${root}/users/${newNickname}`] = activeSessionUsers[oldName];
     updates[`${root}/users/${oldName}`] = null;
 
-    // 2. Predictions (移行)
     if (predictions[oldName]) {
         updates[`${root}/predictions/${newNickname}`] = { ...predictions[oldName], name: newNickname };
         updates[`${root}/predictions/${oldName}`] = null;
     }
-
-    // 3. Final Votes (移行)
     if (finalVotes[oldName]) {
         updates[`${root}/finalVotes/${newNickname}`] = finalVotes[oldName];
         updates[`${root}/finalVotes/${oldName}`] = null;
     }
-
-    // 4. Scores (移行 - 全コンビ分ループ)
     Object.keys(scores).forEach(comedianId => {
         if (scores[comedianId] && scores[comedianId][oldName] !== undefined) {
             updates[`${root}/scores/${comedianId}/${newNickname}`] = scores[comedianId][oldName];
@@ -389,7 +370,6 @@ export default function App() {
     try {
         await update(ref(db), updates);
         
-        // ローカル更新
         const newUser = { ...user, name: newNickname };
         setUser(newUser);
         setLoginName(newNickname); 
@@ -509,7 +489,6 @@ export default function App() {
     alert("決戦の3組を保存しました");
   };
 
-  // ★管理者: プロ審査員得点の保存
   const adminSaveOfficialScore = () => {
     if (!adminOfficialScore || isNaN(Number(adminOfficialScore))) {
       alert("有効な合計得点を入力してください。");
@@ -529,13 +508,11 @@ export default function App() {
     alert(`プロ審査員得点 (${newScore}点) を保存しました。`);
   };
 
-  // ★管理者: ユーザー削除
   const adminDeleteUser = async (name: string) => {
     if (!user?.isAdmin || !confirm(`ユーザー「${name}」の認証情報とセッションを完全に削除します。よろしいですか？`)) return;
     try {
         await remove(ref(db, `${DB_ROOT}/auth/${name}`));
         await remove(ref(db, `${DB_ROOT}/users/${name}`));
-        // 削除されたユーザーがログイン状態だった場合、強制的にログアウトさせる
         if (activeSessionUsers[name]) {
              await set(ref(db, `${DB_ROOT}/userLogoutCommands/${name}`), true);
         }
@@ -546,13 +523,10 @@ export default function App() {
     }
   };
 
-  // ★管理者: 強制ログアウト
   const adminForceLogout = async (name: string) => {
     if (!user?.isAdmin || !confirm(`ユーザー「${name}」のセッションを強制的に終了させます。よろしいですか？`)) return;
     try {
-        // 1. セッションを削除（ログイン中リストから消える）
         await remove(ref(db, `${DB_ROOT}/users/${name}`));
-        // 2. ブラウザ側の LocalStorage を無効化するためのコマンドを発行
         await set(ref(db, `${DB_ROOT}/userLogoutCommands/${name}`), Date.now()); 
 
         alert(`ユーザー「${name}」を強制ログアウトさせました。`);
@@ -570,7 +544,6 @@ export default function App() {
     }
   };
 
-  // ★データリセット実行関数
   const executeDatabaseReset = async (type: 'all' | 'scores_only' | 'predictions_only') => {
       const baseUpdates: Record<string, any> = {
           'gameState/officialScores': {},
@@ -579,7 +552,7 @@ export default function App() {
           'gameState/isScoreRevealed': false,
           'gameState/phase': 'PREDICTION',
           'gameState/finalists': [],
-          'gameState/forceSyncTimestamp': Date.now(), // 参加者画面を強制リセット
+          'gameState/forceSyncTimestamp': Date.now(),
       };
       
       try {
@@ -602,7 +575,7 @@ export default function App() {
                 scores: {},
                 finalVotes: {},
                 ...baseUpdates,
-                'gameState/comedians': INITIAL_COMEDIANS // コンビリストは初期値に戻す
+                'gameState/comedians': INITIAL_COMEDIANS
               };
 
               await update(ref(db, `${DB_ROOT}`), updates);
@@ -615,7 +588,6 @@ export default function App() {
                 'gameState/forceSyncTimestamp': Date.now(),
               };
 
-              // gameState内の予想関連以外の情報は保持
               await update(ref(db, `${DB_ROOT}`), updates);
               alert("予想データのみをリセット完了しました。");
           }
@@ -645,7 +617,6 @@ export default function App() {
     return c ? c.name : "不明";
   };
 
-  // ★ソート機能を統合
   const ranking = useMemo(() => {
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
@@ -659,9 +630,8 @@ export default function App() {
         my: myScore,
         rawAvg: parseFloat(avg) 
       };
-    }).sort((a, b) => b.rawAvg - a.rawAvg); // デフォルトは平均点降順
+    }).sort((a, b) => b.rawAvg - a.rawAvg);
 
-    // ソートロジック
     const direction = sortDirection === 'asc' ? 1 : -1;
     
     return list.sort((a, b) => {
@@ -670,10 +640,10 @@ export default function App() {
         comparison = (a.my - b.my) * direction;
       } else if (sortBy === 'avg') {
         comparison = (a.rawAvg - b.rawAvg) * direction;
-      } else { // 'id' または 'rank' (平均点でソート)
-        comparison = (a.rawAvg - b.rawAvg) * -1; // 降順
+      } else { 
+        comparison = (a.rawAvg - b.rawAvg) * -1;
         if (sortBy === 'id') {
-          comparison = (a.id - b.id) * direction; // IDでソート
+          comparison = (a.id - b.id) * direction;
         }
       }
       return comparison;
@@ -681,7 +651,6 @@ export default function App() {
 
   }, [scores, safeComedians, user?.name, sortBy, sortDirection]);
 
-  // ★採点一覧のソートヘッダーをトグル
   const handleSort = (key: 'id' | 'my' | 'avg' | 'rank') => {
     if (sortBy === key) {
       setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
@@ -701,13 +670,42 @@ export default function App() {
     return result;
   }, [finalVotes, safeFinalists]);
 
+  // ★集計ロジック追加
+  const predictionStats = useMemo(() => {
+    const total = Object.keys(predictions).length;
+    const firstCounts: Record<number, number> = {};
+    const top3Counts: Record<number, number> = {};
+
+    Object.values(predictions).forEach((pred: any) => {
+      // 1位予想
+      const f = Number(pred.first);
+      if (f) firstCounts[f] = (firstCounts[f] || 0) + 1;
+
+      // Top3予想 (first, second, third 全てカウント)
+      [pred.first, pred.second, pred.third].forEach(idStr => {
+        const id = Number(idStr);
+        if (id) top3Counts[id] = (top3Counts[id] || 0) + 1;
+      });
+    });
+
+    // ソート (降順)
+    const firstRanking = Object.entries(firstCounts)
+      .map(([id, count]) => ({ id: Number(id), count }))
+      .sort((a, b) => b.count - a.count);
+
+    const top3Ranking = Object.entries(top3Counts)
+      .map(([id, count]) => ({ id: Number(id), count }))
+      .sort((a, b) => b.count - a.count);
+
+    return { total, firstRanking, top3Ranking };
+  }, [predictions]);
+
   const activePhase = viewMode || displayData.phase;
 
   // =================================================================
   // RENDER User Management View
   // =================================================================
   const renderUserManagement = () => {
-    // 認証ユーザーリスト (登録済み)
     const registeredUsers = Object.keys(allAuthUsers).map(name => ({
       name,
       isLoggedIn: !!activeSessionUsers[name],
@@ -715,9 +713,8 @@ export default function App() {
       isAuth: true
     })).sort((a, b) => b.isLoggedIn - a.isLoggedIn || a.name.localeCompare(b.name));
     
-    // ログイン中のユーザーリスト (セッションのみ)
     const loggedInUsers = Object.keys(activeSessionUsers)
-      .filter(name => !allAuthUsers[name]) // 認証情報がないセッション（管理者セッションなど）
+      .filter(name => !allAuthUsers[name])
       .map(name => ({
         name,
         isLoggedIn: true,
@@ -748,7 +745,7 @@ export default function App() {
                 <button 
                   onClick={() => adminDeleteUser(u.name)}
                   className="text-red-400 hover:text-red-300 p-1 rounded hover:bg-slate-700 transition"
-                  title="認証情報とセッションを完全削除"
+                  title="認証情報とデータを完全削除"
                 >
                   <UserMinus size={16}/>
                 </button>
@@ -1163,6 +1160,57 @@ export default function App() {
               <p className="text-slate-400 text-sm">誰が優勝を当てられるか？</p>
             </div>
 
+            {/* ★集計結果表示 */}
+            <div className="grid gap-4 sm:grid-cols-2 mb-8">
+               {/* 左：1位予想ランキング */}
+               <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 shadow-lg">
+                  <div className="flex items-center gap-2 border-b border-slate-700 pb-2 mb-3">
+                     <Crown size={20} className="text-yellow-500"/>
+                     <span className="font-bold text-white">優勝予想ランキング</span>
+                  </div>
+                  <div className="space-y-2">
+                     {predictionStats.firstRanking.length === 0 && <p className="text-slate-500 text-xs">データなし</p>}
+                     {predictionStats.firstRanking.map((item, idx) => (
+                        <div key={item.id} className="flex justify-between items-center text-sm">
+                           <div className="flex items-center gap-2">
+                              <span className={`font-bold w-4 ${idx===0?'text-yellow-500':idx===1?'text-slate-300':'text-amber-700'}`}>{idx+1}.</span>
+                              <span className="text-slate-200">{getComedianName(item.id)}</span>
+                           </div>
+                           <span className="font-bold text-white">{item.count}票</span>
+                        </div>
+                     ))}
+                  </div>
+               </div>
+
+               {/* 右：Top3選出数ランキング */}
+               <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 shadow-lg">
+                  <div className="flex items-center gap-2 border-b border-slate-700 pb-2 mb-3">
+                     <TrendingUp size={20} className="text-green-500"/>
+                     <span className="font-bold text-white">3連単入りランキング</span>
+                  </div>
+                  <div className="space-y-2">
+                     {predictionStats.top3Ranking.length === 0 && <p className="text-slate-500 text-xs">データなし</p>}
+                     {predictionStats.top3Ranking.slice(0, 5).map((item, idx) => (
+                        <div key={item.id} className="flex justify-between items-center text-sm">
+                           <div className="flex items-center gap-2">
+                              <span className="font-bold w-4 text-slate-500">{idx+1}.</span>
+                              <span className="text-slate-200">{getComedianName(item.id)}</span>
+                           </div>
+                           <span className="font-bold text-white">{item.count}票</span>
+                        </div>
+                     ))}
+                  </div>
+               </div>
+            </div>
+            
+            {/* 投票人数バッジ */}
+            <div className="text-center mb-4">
+               <span className="bg-slate-800 text-slate-400 px-4 py-1 rounded-full text-xs border border-slate-700">
+                  投票人数：<span className="text-white font-bold text-sm ml-1">{predictionStats.total}</span> 人
+               </span>
+            </div>
+
+            {/* 個別予想リスト */}
             <div className="grid gap-4 sm:grid-cols-2">
               {Object.entries(predictions).map(([name, pred]: [string, any]) => (
                 <div key={name} className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg relative overflow-hidden">
