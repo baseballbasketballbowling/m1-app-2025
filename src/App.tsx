@@ -6,13 +6,13 @@ import {
   ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, 
   CheckCircle2, UserCheck, LogOut, Loader2, Users, List,
   Menu, X, LayoutDashboard, Radio, ClipboardList, Vote, UserMinus, UserX, UserCog,
-  TrendingUp, Award, Sparkles
+  TrendingUp, Award
 } from 'lucide-react';
 
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.34 (Welcome Modal Added)";
+const APP_VERSION = "v3.33 (Restored & Fixed)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -83,7 +83,7 @@ export default function App() {
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
-  // ★修正: ローカルで管理
+  // ローカル提出管理
   const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
@@ -103,7 +103,7 @@ export default function App() {
   // ★閲覧モード
   const [viewMode, setViewMode] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [showWelcomeModal, setShowWelcomeModal] = useState(false); // ★ウェルカムモーダル用
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
 
   // コンビ詳細ページ表示用
   const [detailComedianId, setDetailComedianId] = useState<number | null>(null); 
@@ -148,7 +148,6 @@ export default function App() {
         };
         setGameState(newGameState);
 
-        // 初回ロード時のみ localDisplay を設定
         setLocalDisplay(prev => {
           if (prev === null) {
             lastSyncTimestamp.current = newGameState.forceSyncTimestamp;
@@ -216,24 +215,27 @@ export default function App() {
   // 5. データ反映系
   useEffect(() => {
     if (!localDisplay || !user) {
+        // ユーザーがいない、または表示データがない場合は初期化
         setIsScoreSubmitted(false);
         setMyScore(85);
-        if (user?.isAdmin) {
-             setAdminOfficialScore('');
-        }
+        if (user?.isAdmin) setAdminOfficialScore('');
         return;
     }
     
-    const currentComedianId = localDisplay.comedians[localDisplay.currentComedianIndex]?.id;
+    // 現在のコンビID
+    const safeComedians = Array.isArray(localDisplay.comedians) ? localDisplay.comedians : INITIAL_COMEDIANS;
+    const currentComedianId = safeComedians[localDisplay.currentComedianIndex]?.id;
+    
+    // ★修正: 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
     const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
     
     setIsScoreSubmitted(hasSubmittedScore);
     setMyScore(scores[currentComedianId]?.[user.name] || 85); 
     
-    
     if (user?.isAdmin) {
       if (currentComedianId) {
-        setAdminOfficialScore(String(localDisplay.officialScores[currentComedianId] || ''));
+        const offScore = localDisplay.officialScores ? localDisplay.officialScores[currentComedianId] : null;
+        setAdminOfficialScore(String(offScore || ''));
       }
     }
   }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); 
@@ -312,7 +314,6 @@ export default function App() {
 
     if (!predictions[nameToCheck]) {
       setViewMode('PREDICTION');
-      // ★新規参加者（予想未提出）ならウェルカムモーダルを表示
       setShowWelcomeModal(true);
     }
   };
@@ -410,7 +411,7 @@ export default function App() {
       });
       alert("予想を保存しました！");
       setIsPredictionSubmitted(true);
-      setShowWelcomeModal(false); // 予想保存したらモーダルはもう出さない
+      setShowWelcomeModal(false);
     } catch (error: any) {
       alert("保存失敗: " + error.message);
     } finally {
@@ -466,7 +467,6 @@ export default function App() {
 
     const nextIsRevealed = gameState.revealedStatus?.[nextComedian.id] || false;
 
-    // 強制同期命令を削除
     updateGameState({ 
       currentComedianIndex: newIndex,
       isScoreRevealed: nextIsRevealed, 
@@ -632,6 +632,7 @@ export default function App() {
   };
 
   const ranking = useMemo(() => {
+    // ★ガード: displayDataの整合性チェック
     if (!displayData || !displayData.comedians) return [];
 
     const list = safeComedians.map(c => {
@@ -640,8 +641,9 @@ export default function App() {
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
       
-      const officialScore = displayData.officialScores[c.id] || 0;
-      const isRevealed = displayData.revealedStatus?.[c.id] || false;
+      // ★安全にプロ得点を取得 (displayData.officialScores が未定義の場合に対応)
+      const officialScore = (displayData.officialScores && displayData.officialScores[c.id]) || 0;
+      const isRevealed = (displayData.revealedStatus && displayData.revealedStatus[c.id]) || false;
 
       return { 
         ...c, 
@@ -678,7 +680,7 @@ export default function App() {
       return comparison;
     });
 
-  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData?.officialScores, displayData?.revealedStatus]);
+  }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData]); // displayData全体を依存に
 
   const handleSort = (key: 'id' | 'my' | 'avg' | 'official') => {
     if (sortBy === key) {
@@ -746,7 +748,8 @@ export default function App() {
     return (
       <div className="animate-fade-in space-y-6">
         <h2 className="text-2xl font-black text-white mb-4">ユーザー管理</h2>
-        {/* (ユーザー管理のレンダリング内容は変更なし) */}
+
+        {/* 登録ユーザーリスト (永続) */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
           <h3 className="font-bold text-lg text-indigo-400 mb-3 flex items-center gap-2">
             登録ユーザー ({registeredUsers.length}人)
@@ -774,6 +777,7 @@ export default function App() {
           </div>
         </div>
 
+        {/* ログイン中ユーザーリスト (セッションのみ) */}
         <div className="bg-slate-900 rounded-xl border border-slate-800 shadow-xl p-4">
           <h3 className="font-bold text-lg text-red-400 mb-3 flex items-center gap-2">
             ログイン中ユーザー ({loggedInUsers.length + registeredUsers.filter(u => u.isLoggedIn).length}人)
@@ -803,9 +807,10 @@ export default function App() {
   const renderScoreDetail = (comedianId: number) => {
     const comedian = safeComedians.find(c => c.id === comedianId);
     const cScores = scores[comedianId] || {};
-    const officialScore = displayData?.officialScores[comedianId];
+    // ★修正: 安全にアクセス
+    const officialScore = (displayData.officialScores && displayData.officialScores[comedianId]);
 
-    if (!comedian || !displayData?.revealedStatus?.[comedianId]) {
+    if (!comedian || !displayData.revealedStatus?.[comedianId]) {
       return (
         <div className="text-center py-10 text-slate-400 bg-slate-900 rounded-xl">
           このコンビの採点結果はまだ公開されていません。
@@ -1097,8 +1102,8 @@ export default function App() {
                       const revealedB = displayData.revealedStatus?.[b.id] ? 1 : 0;
                       if (revealedA !== revealedB) return revealedB - revealedA; // オープン済みが先
 
-                      const scoreA = displayData.officialScores[a.id] || 0;
-                      const scoreB = displayData.officialScores[b.id] || 0;
+                      const scoreA = (displayData.officialScores && displayData.officialScores[a.id]) || 0;
+                      const scoreB = (displayData.officialScores && displayData.officialScores[b.id]) || 0;
                       return scoreB - scoreA; // プロ審査員得点の降順
                     })
                     .map(c => {
@@ -1170,7 +1175,7 @@ export default function App() {
                     {ranking.map((c, i) => { 
                       const isRevealed = displayData.revealedStatus?.[c.id];
                       const myScoreVal = scores[c.id]?.[user?.name || ''];
-                      const officialScore = displayData.officialScores[c.id];
+                      const officialScore = displayData.officialScores && displayData.officialScores[c.id];
 
                       return (
                         <tr key={c.id} className="hover:bg-slate-800/50">
@@ -1370,7 +1375,7 @@ export default function App() {
             </div>
 
             {/* プロ審査員得点の表示 (平均点の下に配置) */}
-            {displayData.officialScores[currentComedian.id] !== undefined && displayData.officialScores[currentComedian.id] !== null && (
+            {displayData.officialScores && displayData.officialScores[currentComedian.id] !== undefined && displayData.officialScores[currentComedian.id] !== null && (
                 <div className="text-center text-xl font-bold text-red-400 whitespace-nowrap">
                     プロ審査員得点: {displayData.officialScores[currentComedian.id]} 点
                 </div>
@@ -1747,6 +1752,29 @@ export default function App() {
         </div>
       )}
 
+      {/* ★ニックネーム変更モーダル */}
+      {showNicknameModal && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-slate-900 w-full max-w-sm rounded-xl border border-slate-700 p-6 space-y-4">
+            <h3 className="text-xl font-bold text-white text-center whitespace-nowrap">ニックネーム変更</h3>
+            <p className="text-sm text-slate-400 text-center">新しいニックネームを入力してください。<br/>過去のデータは引き継がれます。</p>
+            
+            <input 
+              type="text" 
+              value={newNickname}
+              onChange={e => setNewNickname(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded p-3 text-white focus:ring-2 focus:ring-yellow-500 outline-none"
+              placeholder="新しいニックネーム"
+            />
+            
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => { setShowNicknameModal(false); setNewNickname(""); }} className="flex-1 py-2 bg-slate-800 rounded text-slate-400 whitespace-nowrap">キャンセル</button>
+              <button onClick={handleNicknameChange} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded whitespace-nowrap">変更する</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ★ウェルカムモーダル */}
       {showWelcomeModal && (
         <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
@@ -1805,29 +1833,6 @@ export default function App() {
             >
               さっそく始める！
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* ★ニックネーム変更モーダル */}
-      {showNicknameModal && (
-        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 w-full max-w-sm rounded-xl border border-slate-700 p-6 space-y-4">
-            <h3 className="text-xl font-bold text-white text-center whitespace-nowrap">ニックネーム変更</h3>
-            <p className="text-sm text-slate-400 text-center">新しいニックネームを入力してください。<br/>過去のデータは引き継がれます。</p>
-            
-            <input 
-              type="text" 
-              value={newNickname}
-              onChange={e => setNewNickname(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded p-3 text-white focus:ring-2 focus:ring-yellow-500 outline-none"
-              placeholder="新しいニックネーム"
-            />
-            
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => { setShowNicknameModal(false); setNewNickname(""); }} className="flex-1 py-2 bg-slate-800 rounded text-slate-400 whitespace-nowrap">キャンセル</button>
-              <button onClick={handleNicknameChange} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded whitespace-nowrap">変更する</button>
-            </div>
           </div>
         </div>
       )}
