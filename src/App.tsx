@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.36 (Restored & Guide Added)";
+const APP_VERSION = "v3.37 (Fix Ranking & Guide)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -99,6 +99,7 @@ export default function App() {
   // ★閲覧モード
   const [viewMode, setViewMode] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
 
   // コンビ詳細ページ表示用
   const [detailComedianId, setDetailComedianId] = useState<number | null>(null); 
@@ -249,6 +250,7 @@ export default function App() {
     
     const nameToCheck = loginName.trim();
     
+    // Auth Check
     const authSnapshot = await get(child(ref(db), `${DB_ROOT}/auth/${nameToCheck}`));
     const isNewUser = !authSnapshot.exists();
 
@@ -376,6 +378,7 @@ export default function App() {
       });
       alert("予想を保存しました！");
       setIsPredictionSubmitted(true);
+      setShowWelcomeModal(false);
     } catch (error: any) {
       alert("保存失敗: " + error.message);
     } finally {
@@ -564,7 +567,6 @@ export default function App() {
   };
 
   const ranking = useMemo(() => {
-    // ガード: displayDataが不完全な場合は空配列を返す
     if (!displayData || !displayData.comedians) return [];
 
     const list = safeComedians.map(c => {
@@ -576,7 +578,15 @@ export default function App() {
       const officialScore = (displayData.officialScores && displayData.officialScores[c.id]) || 0;
       const isRevealed = (displayData.revealedStatus && displayData.revealedStatus[c.id]) || false;
 
-      return { c, avg: parseFloat(avg), my: myScore, rawAvg: parseFloat(avg), official: officialScore, isRevealed };
+      // ★修正: フラットな構造にする (c.name などを直接使えるように)
+      return { 
+        ...c, // 展開
+        avg: parseFloat(avg), 
+        my: myScore,
+        rawAvg: parseFloat(avg),
+        official: officialScore,
+        isRevealed 
+      };
     }).sort((a, b) => {
         if (a.isRevealed !== b.isRevealed) return a.isRevealed ? -1 : 1;
         return b.official - a.official;
@@ -591,7 +601,7 @@ export default function App() {
       if (sortBy === 'my') comparison = (a.my - b.my) * direction;
       else if (sortBy === 'avg') comparison = (a.rawAvg - b.rawAvg) * direction;
       else if (sortBy === 'official') comparison = (a.official - b.official) * direction;
-      else comparison = (a.c.id - b.c.id) * direction;
+      else comparison = (a.id - b.id) * direction; // id もフラットになっている
       return comparison;
     });
   }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData]);
@@ -832,16 +842,16 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {ranking.map((c, i) => { 
-                      const isRevealed = displayData.revealedStatus?.[c.id];
-                      const myScoreVal = scores[c.id]?.[user?.name || ''];
-                      const officialScore = displayData.officialScores?.[c.id];
+                    {ranking.map((item, i) => { 
+                      // ★修正: ranking配列は既にフラット化済み (item.name, item.id などでアクセス可能)
+                      const myScoreVal = scores[item.id]?.[user?.name || ''];
+                      const officialScore = item.official;
                       return (
-                        <tr key={c.id} className="hover:bg-slate-800/50">
+                        <tr key={item.id} className="hover:bg-slate-800/50">
                           <td className="p-3 text-center text-slate-500 text-xs sm:text-sm whitespace-nowrap">{i + 1}</td>
-                          <td className="p-3 font-bold text-white text-xs sm:text-sm whitespace-nowrap">{c.name}</td>
+                          <td className="p-3 font-bold text-white text-xs sm:text-sm whitespace-nowrap">{item.name}</td>
                           <td className="p-3 text-center font-bold text-blue-400 text-xs sm:text-sm whitespace-nowrap">{myScoreVal !== undefined ? myScoreVal : "-"}</td>
-                          <td className="p-3 text-center font-bold text-yellow-500 text-xs sm:text-sm whitespace-nowrap">{isRevealed && c.rawAvg > 0 ? c.rawAvg : <span className="text-slate-600">???</span>}</td>
+                          <td className="p-3 text-center font-bold text-yellow-500 text-xs sm:text-sm whitespace-nowrap">{item.isRevealed && item.rawAvg > 0 ? item.rawAvg : <span className="text-slate-600">???</span>}</td>
                           <td className="p-3 text-center text-xs sm:text-sm whitespace-nowrap">{officialScore !== undefined && officialScore !== null ? (<span className={`inline-block px-2 py-1 rounded text-xs font-bold leading-none bg-red-600 text-white`}>{officialScore}</span>) : (<span className="text-slate-500">-</span>)}</td>
                         </tr>
                       );
@@ -857,7 +867,7 @@ export default function App() {
         {activePhase === 'PREDICTION' && (
           <div className="animate-fade-in space-y-6">
             
-            {/* 使い方ガイド */}
+            {/* 使い方ガイド (新規追加) */}
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-xl border border-blue-500/30 shadow-lg relative overflow-hidden">
                 <div className="absolute -right-4 -top-4 text-blue-500/10 rotate-12"><Info size={100} /></div>
                 <h3 className="text-lg font-black text-white mb-4 flex items-center gap-2">
@@ -964,7 +974,7 @@ export default function App() {
                 {displayData.isScoreRevealed ? (
                   <div className="inline-flex items-baseline gap-2 bg-black/40 px-6 py-2 rounded-full backdrop-blur-sm border border-yellow-500/30">
                     <span className="text-sm text-slate-300 whitespace-nowrap">平均</span>
-                    <span className="text-5xl font-black text-yellow-400">{ranking.find(c => c.c.id === currentComedian.id)?.avg}</span>
+                    <span className="text-5xl font-black text-yellow-400">{ranking.find(c => c.id === currentComedian.id)?.avg}</span>
                     <span className="text-lg font-bold text-yellow-600 whitespace-nowrap">点</span>
                   </div>
                 ) : (
@@ -1023,11 +1033,12 @@ export default function App() {
                 <div className="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
                   <div className="bg-slate-800/50 px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-bold text-slate-300 whitespace-nowrap"><Trophy size={16}/> 現在の順位 (プロ審査員得点順)</div>
                   <div className="divide-y divide-slate-800">
+                    {/* ★修正: ranking のアイテムをフラットに扱えるように修正 */}
                     {ranking.map((item, i) => (
-                      <div key={item.c.id} className={`flex items-center justify-between p-3 ${item.c.id===currentComedian.id ? 'bg-yellow-500/5' : ''}`}>
+                      <div key={item.id} className={`flex items-center justify-between p-3 ${item.id===currentComedian.id ? 'bg-yellow-500/5' : ''}`}>
                         <div className="flex items-center gap-3 w-3/5">
                           <span className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold ${i===0 ? 'bg-yellow-500 text-black' : i===1 ? 'bg-slate-400 text-black' : i===2 ? 'bg-amber-700 text-white' : 'bg-slate-800 text-slate-500'}`}>{i+1}</span>
-                          <span className="font-bold text-sm whitespace-nowrap">{item.c.name}</span>
+                          <span className="font-bold text-sm whitespace-nowrap">{item.name}</span>
                         </div>
                         <div className="flex gap-4 justify-end text-sm w-2/5">
                            <span className="text-yellow-500 font-bold whitespace-nowrap">{item.avg}</span>
