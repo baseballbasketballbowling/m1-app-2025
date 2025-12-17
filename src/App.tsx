@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.35 (Prediction Guide Added)";
+const APP_VERSION = "v3.36 (Restored & Guide Added)";
 
 // あなたのFirebase設定
 const firebaseConfig = {
@@ -25,7 +25,7 @@ const firebaseConfig = {
   databaseURL: "https://m1-app-1e177-default-rtdb.firebaseio.com"
 };
 
-// コンビ名リスト（2025年版想定）
+// コンビ名リスト
 const INITIAL_COMEDIANS = [
   { id: 1, name: "エバース" },
   { id: 2, name: "豪快キャプテン" },
@@ -43,10 +43,6 @@ const INITIAL_COMEDIANS = [
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const DB_ROOT = 'm1_2025_v3'; 
-
-// ------------------------------------------------------------------
-// コンポーネント実装
-// ------------------------------------------------------------------
 
 export default function App() {
   // --- User State ---
@@ -68,7 +64,7 @@ export default function App() {
     officialScores: {} as Record<string, number | null>
   });
 
-  // --- Local Display State (参加者用フリーズデータ) ---
+  // --- Local Display State ---
   const [localDisplay, setLocalDisplay] = useState<typeof gameState | null>(null);
   
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
@@ -83,8 +79,8 @@ export default function App() {
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
-  // ★修正: ローカルで管理
-  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
@@ -103,7 +99,6 @@ export default function App() {
   // ★閲覧モード
   const [viewMode, setViewMode] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
 
   // コンビ詳細ページ表示用
   const [detailComedianId, setDetailComedianId] = useState<number | null>(null); 
@@ -112,7 +107,6 @@ export default function App() {
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [newNickname, setNewNickname] = useState("");
   
-  // 最後に処理した同期命令の時刻
   const lastSyncTimestamp = useRef(0);
 
   // 1. ログイン復元
@@ -197,14 +191,12 @@ export default function App() {
   // ★4. 強制ログアウトコマンド監視
   useEffect(() => {
     if (user?.name && logoutCommands[user.name]) {
-      console.log(`[LOGOUT COMMAND] Received command for user: ${user.name}`);
       localStorage.removeItem('m1_user_v2');
       remove(ref(db, `${DB_ROOT}/userLogoutCommands/${user.name}`));
       setUser(null);
       alert(`管理者の操作により、強制的にログアウトされました。`);
     }
   }, [user?.name, logoutCommands]); 
-
 
   // 5. データ反映系
   useEffect(() => {
@@ -220,6 +212,7 @@ export default function App() {
     
     if (currentComedian) {
       const currentComedianId = currentComedian.id;
+      // 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
       const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
       
       setIsScoreSubmitted(hasSubmittedScore);
@@ -259,9 +252,11 @@ export default function App() {
     const authSnapshot = await get(child(ref(db), `${DB_ROOT}/auth/${nameToCheck}`));
     const isNewUser = !authSnapshot.exists();
 
-    if (isAdminLogin && adminPassword !== "0121") {
-      alert("管理者パスワードが違います");
-      return;
+    if (isAdminLogin) {
+      if (adminPassword !== "0121") {
+        alert("管理者パスワードが違います");
+        return;
+      }
     }
 
     const sessionSnapshot = await get(child(ref(db), `${DB_ROOT}/users/${nameToCheck}`));
@@ -288,8 +283,14 @@ export default function App() {
     setUser(userData);
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
 
-    if (!predictions[nameToCheck]) {
-      setViewMode('PREDICTION');
+    // ★ログイン時、予想がまだなら予想画面へ誘導
+    try {
+      const predSnap = await get(child(ref(db), `${DB_ROOT}/predictions/${nameToCheck}`));
+      if (!predSnap.exists()) {
+          setViewMode('PREDICTION');
+      }
+    } catch(e) {
+      console.error(e);
     }
   };
 
@@ -852,7 +853,7 @@ export default function App() {
           </div>
         )}
 
-        {/* --- ★ここに使い方ガイドを追加 --- */}
+        {/* ★ここに使い方ガイドを追加 --- */}
         {activePhase === 'PREDICTION' && (
           <div className="animate-fade-in space-y-6">
             
@@ -1161,20 +1162,6 @@ export default function App() {
               <button onClick={() => { setShowNicknameModal(false); setNewNickname(""); }} className="flex-1 py-2 bg-slate-800 rounded text-slate-400 whitespace-nowrap">キャンセル</button>
               <button onClick={handleNicknameChange} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded whitespace-nowrap">変更する</button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {showWelcomeModal && (
-        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 w-full max-w-md rounded-xl border border-yellow-600/50 shadow-2xl p-6 relative overflow-y-auto max-h-[90vh]">
-            <div className="text-center mb-6"><Sparkles className="w-12 h-12 text-yellow-500 mx-auto mb-2 animate-pulse" /><h2 className="text-2xl font-black text-white">M-1 VOTINGへようこそ！</h2><p className="text-slate-400 text-xs">一緒に大会を盛り上げよう！</p></div>
-            <div className="space-y-6">
-              <div className="flex gap-4"><div className="bg-blue-900/50 p-3 rounded-lg h-fit"><Crown className="text-blue-400" size={24} /></div><div><h3 className="font-bold text-white text-lg mb-1">1. 3連単予想をしよう！</h3><p className="text-sm text-slate-300 leading-relaxed">このページであなたの思う優勝〜3位までのコンビを選択してください。<br/>右上のメニューを押すと<span className="text-blue-400 font-bold">みんなの予想</span>が見れます。</p></div></div>
-              <div className="flex gap-4"><div className="bg-red-900/50 p-3 rounded-lg h-fit"><Mic className="text-red-400" size={24} /></div><div><h3 className="font-bold text-white text-lg mb-1">2. 当日はリアルタイム採点！</h3><p className="text-sm text-slate-300 leading-relaxed">ネタが終わった後に個人で採点する時間を設けます。<br/>全員の採点を見ながら誰が決勝に進むのかドキドキを楽しもう！</p></div></div>
-              <div className="flex gap-4"><div className="bg-yellow-900/50 p-3 rounded-lg h-fit"><Trophy className="text-yellow-400" size={24} /></div><div><h3 className="font-bold text-white text-lg mb-1">3. 最終決戦もみんなで投票！</h3><p className="text-sm text-slate-300 leading-relaxed">最後の3組に残った中から、あなたが一番面白かったコンビに投票しよう！</p></div></div>
-            </div>
-            <button onClick={() => setShowWelcomeModal(false)} className="mt-8 w-full bg-gradient-to-r from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 text-black font-black py-4 rounded-xl text-lg shadow-lg transform transition active:scale-95">さっそく始める！</button>
           </div>
         </div>
       )}
