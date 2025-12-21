@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.40 (900pts Scale)";
+const APP_VERSION = "v3.41 (History Display Fix)";
 
 // 自動ログアウトまでの時間 (ミリ秒) = 1時間
 const INACTIVITY_TIMEOUT = 60 * 60 * 1000;
@@ -82,8 +82,8 @@ export default function App() {
   // --- Local UI State ---
   const [myPrediction, setMyPrediction] = useState({ first: "", second: "", third: "" });
   const [myScore, setMyScore] = useState(85);
-  // ★修正: ローカルで管理
-  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false); 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isScoreSubmitted, setIsScoreSubmitted] = useState(false);
   const [editingName, setEditingName] = useState("");
   const [isPredictionSubmitted, setIsPredictionSubmitted] = useState(false);
   
@@ -110,7 +110,6 @@ export default function App() {
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [newNickname, setNewNickname] = useState("");
   
-  // 最後に処理した同期命令の時刻
   const lastSyncTimestamp = useRef(0);
 
   // 1. ログイン復元
@@ -172,7 +171,6 @@ export default function App() {
     const unsubAuth = onValue(authRef, (snap) => setAllAuthUsers(snap.val() || {}));
     const unsubUsers = onValue(usersRef, (snap) => setActiveSessionUsers(snap.val() || {}));
     const unsubLogoutCommands = onValue(logoutCommandRef, (snap) => setLogoutCommands(snap.val() || {}));
-
     const unsubScores = onValue(scoresRef, (snap) => setScores(snap.val() || {}));
     const unsubPreds = onValue(predsRef, (snap) => setPredictions(snap.val() || {}));
     const unsubVotes = onValue(votesRef, (snap) => setFinalVotes(snap.val() || {}));
@@ -239,7 +237,6 @@ export default function App() {
     };
   }, [user]);
 
-
   // 6. データ反映系
   useEffect(() => {
     if (!localDisplay || !user) {
@@ -254,14 +251,14 @@ export default function App() {
     
     if (currentComedian) {
       const currentComedianId = currentComedian.id;
-      // 自分の点数提出状態を、現在のコンビIDのスコアを見て判定
       const hasSubmittedScore = scores[currentComedianId] && scores[currentComedianId][user.name] !== undefined;
       
       setIsScoreSubmitted(hasSubmittedScore);
       setMyScore(scores[currentComedianId]?.[user.name] || 85); 
       
       if (user?.isAdmin) {
-        setAdminOfficialScore(String(localDisplay.officialScores?.[currentComedianId] || ''));
+        // ★修正: 安全にアクセス
+        setAdminOfficialScore(String((localDisplay.officialScores && localDisplay.officialScores[currentComedianId]) || ''));
       }
     }
   }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); 
@@ -291,7 +288,6 @@ export default function App() {
     
     const nameToCheck = loginName.trim();
     
-    // Auth Check
     const authSnapshot = await get(child(ref(db), `${DB_ROOT}/auth/${nameToCheck}`));
     const isNewUser = !authSnapshot.exists();
 
@@ -326,7 +322,6 @@ export default function App() {
     setUser(userData);
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
 
-    // ★ログイン時、予想がまだなら予想画面へ誘導 (モーダルは削除してガイドのみ)
     try {
       const predSnap = await get(child(ref(db), `${DB_ROOT}/predictions/${nameToCheck}`));
       if (!predSnap.exists()) {
@@ -608,27 +603,20 @@ export default function App() {
   };
 
   const ranking = useMemo(() => {
+    // ★修正: 安全装置追加。displayData.comediansが存在しない場合は空配列を返す
     if (!displayData || !displayData.comedians) return [];
 
     const list = safeComedians.map(c => {
       const cScores = scores[c.id] || {};
       const values = Object.values(cScores) as number[];
-      // ★900点満点換算
-      const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length * 9).toFixed(0) : "0";
-      // ★自分の点数も9倍
-      const myScore = (cScores[user?.name || ''] || 0) * 9;
+      const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
+      const myScore = cScores[user?.name || ''] || 0;
       
+      // ★修正: 安全にアクセス
       const officialScore = (displayData.officialScores && displayData.officialScores[c.id]) || 0;
       const isRevealed = (displayData.revealedStatus && displayData.revealedStatus[c.id]) || false;
 
-      return { 
-        ...c, 
-        avg: parseInt(avg), 
-        my: myScore,
-        rawAvg: parseInt(avg),
-        official: officialScore,
-        isRevealed 
-      };
+      return { c, avg: parseFloat(avg), my: myScore, rawAvg: parseFloat(avg), official: officialScore, isRevealed };
     }).sort((a, b) => {
         if (a.isRevealed !== b.isRevealed) return a.isRevealed ? -1 : 1;
         return b.official - a.official;
@@ -643,7 +631,7 @@ export default function App() {
       if (sortBy === 'my') comparison = (a.my - b.my) * direction;
       else if (sortBy === 'avg') comparison = (a.rawAvg - b.rawAvg) * direction;
       else if (sortBy === 'official') comparison = (a.official - b.official) * direction;
-      else comparison = (a.id - b.id) * direction;
+      else comparison = (a.c.id - b.c.id) * direction;
       return comparison;
     });
   }, [scores, safeComedians, user?.name, sortBy, sortDirection, displayData]);
@@ -711,6 +699,7 @@ export default function App() {
   const renderScoreDetail = (comedianId: number) => {
     const comedian = safeComedians.find(c => c.id === comedianId);
     const cScores = scores[comedianId] || {};
+    // ★修正: 安全にアクセス
     const officialScore = displayData?.officialScores ? displayData.officialScores[comedianId] : undefined;
 
     if (!comedian || !displayData?.revealedStatus?.[comedianId]) {
@@ -722,9 +711,9 @@ export default function App() {
       );
     }
     
-    // ★900点満点換算
     const values = Object.values(cScores) as number[];
-    const avg = values.length > 0 ? (values.reduce((a, b) => a + b, 0) / values.length * 9).toFixed(0) : "0";
+    const total = values.reduce((a, b) => a + b, 0);
+    const avg = values.length > 0 ? (total / values.length).toFixed(1) : "0.0";
 
     return (
       <div className="animate-fade-in space-y-6">
@@ -745,8 +734,7 @@ export default function App() {
                 {Object.entries(cScores).map(([name, score]) => (
                     <div key={name} className={`p-2 rounded text-center border ${name===user?.name ? 'bg-blue-900/50 border-blue-500' : 'bg-slate-800 border-slate-700'}`}>
                         <div className="text-[10px] text-slate-400 truncate mb-1">{name}</div>
-                        {/* 900点満点換算 */}
-                        <div className={`text-xl font-black ${score*9>=855 ? 'text-yellow-500' : score*9>=810 ? 'text-red-400' : 'text-white'}`}>{score * 9}</div>
+                        <div className={`text-xl font-black ${score>=95 ? 'text-yellow-500' : score>=90 ? 'text-red-400' : 'text-white'}`}>{score}</div>
                     </div>
                 ))}
             </div>
@@ -893,9 +881,8 @@ export default function App() {
                         <tr key={item.c.id} className="hover:bg-slate-800/50">
                           <td className="p-3 text-center text-slate-500 text-xs sm:text-sm whitespace-nowrap">{i + 1}</td>
                           <td className="p-3 font-bold text-white text-xs sm:text-sm whitespace-nowrap">{item.c.name}</td>
-                          {/* 900点満点換算 */}
-                          <td className="p-3 text-center font-bold text-blue-400 text-xs sm:text-sm whitespace-nowrap">{myScoreVal !== undefined ? myScoreVal * 9 : "-"}</td>
-                          <td className="p-3 text-center font-bold text-yellow-500 text-xs sm:text-sm whitespace-nowrap">{isRevealed && item.rawAvg > 0 ? item.avg : <span className="text-slate-600">???</span>}</td>
+                          <td className="p-3 text-center font-bold text-blue-400 text-xs sm:text-sm whitespace-nowrap">{myScoreVal !== undefined ? myScoreVal : "-"}</td>
+                          <td className="p-3 text-center font-bold text-yellow-500 text-xs sm:text-sm whitespace-nowrap">{isRevealed && item.rawAvg > 0 ? item.rawAvg : <span className="text-slate-600">???</span>}</td>
                           <td className="p-3 text-center text-xs sm:text-sm whitespace-nowrap">{officialScore !== undefined && officialScore !== null ? (<span className={`inline-block px-2 py-1 rounded text-xs font-bold leading-none bg-red-600 text-white`}>{officialScore}</span>) : (<span className="text-slate-500">-</span>)}</td>
                         </tr>
                       );
@@ -1018,7 +1005,6 @@ export default function App() {
                 {displayData.isScoreRevealed ? (
                   <div className="inline-flex items-baseline gap-2 bg-black/40 px-6 py-2 rounded-full backdrop-blur-sm border border-yellow-500/30">
                     <span className="text-sm text-slate-300 whitespace-nowrap">平均</span>
-                    {/* 900点満点換算 */}
                     <span className="text-5xl font-black text-yellow-400">{ranking.find(c => c.c.id === currentComedian.id)?.avg}</span>
                     <span className="text-lg font-bold text-yellow-600 whitespace-nowrap">点</span>
                   </div>
@@ -1070,8 +1056,7 @@ export default function App() {
                     {Object.entries(scores[currentComedian.id] || {}).map(([name, score]) => (
                       <div key={name} className={`p-2 rounded text-center border ${name===user.name ? 'bg-slate-800 border-blue-500/50' : 'bg-slate-800 border-transparent'}`}>
                         <div className="text-[10px] text-slate-400 truncate mb-1">{name}</div>
-                        {/* 900点満点換算 */}
-                        <div className={`text-xl font-black ${score*9>=855 ? 'text-yellow-500' : score*9>=810 ? 'text-red-400' : 'text-white'}`}>{score * 9}</div>
+                        <div className={`text-xl font-black ${score>=95 ? 'text-yellow-500' : score>=90 ? 'text-red-400' : 'text-white'}`}>{score}</div>
                       </div>
                     ))}
                   </div>
