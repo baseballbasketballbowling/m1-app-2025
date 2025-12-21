@@ -12,7 +12,7 @@ import {
 // ------------------------------------------------------------------
 // 設定エリア
 // ------------------------------------------------------------------
-const APP_VERSION = "v3.39 (Guide Fixed & No Modal)";
+const APP_VERSION = "v3.41 (History Display Fix)";
 
 // 自動ログアウトまでの時間 (ミリ秒) = 1時間
 const INACTIVITY_TIMEOUT = 60 * 60 * 1000;
@@ -208,7 +208,6 @@ export default function App() {
 
     let timeoutId: NodeJS.Timeout;
 
-    // ログアウト実行関数 (confirmなしで実行)
     const performAutoLogout = () => {
         if (user?.name) remove(ref(db, `${DB_ROOT}/users/${user.name}`));
         localStorage.removeItem('m1_user_v2');
@@ -226,20 +225,17 @@ export default function App() {
       timeoutId = setTimeout(performAutoLogout, INACTIVITY_TIMEOUT);
     };
 
-    // イベントリスナー登録
     const events = ['mousedown', 'keydown', 'touchstart', 'scroll'];
     const handler = () => resetTimer();
     events.forEach(e => window.addEventListener(e, handler));
 
-    // 初期タイマースタート
     resetTimer();
 
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
       events.forEach(e => window.removeEventListener(e, handler));
     };
-  }, [user]); // userが変わるたび（ログイン時）にセットアップ
-
+  }, [user]);
 
   // 6. データ反映系
   useEffect(() => {
@@ -261,7 +257,8 @@ export default function App() {
       setMyScore(scores[currentComedianId]?.[user.name] || 85); 
       
       if (user?.isAdmin) {
-        setAdminOfficialScore(String(localDisplay.officialScores?.[currentComedianId] || ''));
+        // ★修正: 安全にアクセス
+        setAdminOfficialScore(String((localDisplay.officialScores && localDisplay.officialScores[currentComedianId]) || ''));
       }
     }
   }, [localDisplay?.currentComedianIndex, localDisplay, user?.isAdmin, user?.name, scores]); 
@@ -291,13 +288,14 @@ export default function App() {
     
     const nameToCheck = loginName.trim();
     
-    // Auth Check
     const authSnapshot = await get(child(ref(db), `${DB_ROOT}/auth/${nameToCheck}`));
     const isNewUser = !authSnapshot.exists();
 
-    if (isAdminLogin && adminPassword !== "0121") {
-      alert("管理者パスワードが違います");
-      return;
+    if (isAdminLogin) {
+      if (adminPassword !== "0121") {
+        alert("管理者パスワードが違います");
+        return;
+      }
     }
 
     const sessionSnapshot = await get(child(ref(db), `${DB_ROOT}/users/${nameToCheck}`));
@@ -324,7 +322,6 @@ export default function App() {
     setUser(userData);
     localStorage.setItem('m1_user_v2', JSON.stringify(userData));
 
-    // ★ログイン時、予想がまだなら予想画面へ誘導
     try {
       const predSnap = await get(child(ref(db), `${DB_ROOT}/predictions/${nameToCheck}`));
       if (!predSnap.exists()) {
@@ -589,6 +586,7 @@ export default function App() {
 
   // --- Helpers ---
   const dataForRendering = user?.isAdmin ? gameState : (localDisplay || gameState);
+  // ★修正: displayData が null の場合を考慮
   const displayData = dataForRendering || gameState; 
   
   const safeComedians = Array.isArray(displayData.comedians) ? displayData.comedians : INITIAL_COMEDIANS;
@@ -605,7 +603,7 @@ export default function App() {
   };
 
   const ranking = useMemo(() => {
-    // ガード: displayDataが不完全な場合は空配列を返す
+    // ★修正: 安全装置追加。displayData.comediansが存在しない場合は空配列を返す
     if (!displayData || !displayData.comedians) return [];
 
     const list = safeComedians.map(c => {
@@ -614,6 +612,7 @@ export default function App() {
       const avg = values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "0.0";
       const myScore = cScores[user?.name || ''] || 0;
       
+      // ★修正: 安全にアクセス
       const officialScore = (displayData.officialScores && displayData.officialScores[c.id]) || 0;
       const isRevealed = (displayData.revealedStatus && displayData.revealedStatus[c.id]) || false;
 
@@ -700,6 +699,7 @@ export default function App() {
   const renderScoreDetail = (comedianId: number) => {
     const comedian = safeComedians.find(c => c.id === comedianId);
     const cScores = scores[comedianId] || {};
+    // ★修正: 安全にアクセス
     const officialScore = displayData?.officialScores ? displayData.officialScores[comedianId] : undefined;
 
     if (!comedian || !displayData?.revealedStatus?.[comedianId]) {
@@ -873,16 +873,16 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
-                    {ranking.map((c, i) => { 
-                      const isRevealed = displayData.revealedStatus?.[c.id];
-                      const myScoreVal = scores[c.id]?.[user?.name || ''];
-                      const officialScore = displayData.officialScores?.[c.id];
+                    {ranking.map((item, i) => { 
+                      const isRevealed = displayData.revealedStatus?.[item.c.id];
+                      const myScoreVal = scores[item.c.id]?.[user?.name || ''];
+                      const officialScore = displayData.officialScores?.[item.c.id];
                       return (
-                        <tr key={c.id} className="hover:bg-slate-800/50">
+                        <tr key={item.c.id} className="hover:bg-slate-800/50">
                           <td className="p-3 text-center text-slate-500 text-xs sm:text-sm whitespace-nowrap">{i + 1}</td>
-                          <td className="p-3 font-bold text-white text-xs sm:text-sm whitespace-nowrap">{c.name}</td>
+                          <td className="p-3 font-bold text-white text-xs sm:text-sm whitespace-nowrap">{item.c.name}</td>
                           <td className="p-3 text-center font-bold text-blue-400 text-xs sm:text-sm whitespace-nowrap">{myScoreVal !== undefined ? myScoreVal : "-"}</td>
-                          <td className="p-3 text-center font-bold text-yellow-500 text-xs sm:text-sm whitespace-nowrap">{isRevealed && c.rawAvg > 0 ? c.rawAvg : <span className="text-slate-600">???</span>}</td>
+                          <td className="p-3 text-center font-bold text-yellow-500 text-xs sm:text-sm whitespace-nowrap">{isRevealed && item.rawAvg > 0 ? item.rawAvg : <span className="text-slate-600">???</span>}</td>
                           <td className="p-3 text-center text-xs sm:text-sm whitespace-nowrap">{officialScore !== undefined && officialScore !== null ? (<span className={`inline-block px-2 py-1 rounded text-xs font-bold leading-none bg-red-600 text-white`}>{officialScore}</span>) : (<span className="text-slate-500">-</span>)}</td>
                         </tr>
                       );
